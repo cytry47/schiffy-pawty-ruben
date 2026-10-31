@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Schiffy Pawty (Ruben's party kit)</title>
+<title>Schiffy Pawty</title>
 </head>
 <body>
 <title>Schiffy Pawty</title>
@@ -7174,7 +7174,7 @@ function mgIntroCard(m) {
     const n = wrapLeft(txt, 560, ry + 30, 480, 20, 24, INK, 2);
     ry += 54 + n * 24 - 14;
   });
-  if (tm && !m.def.only) T('Played as teams: the side with the better average place wins.', 560, ry + 4, 16, '#7a4fc0', 'left', { stroke: false, w: 600 });
+  if (tm && !m.def.only) T(m.def.teamTxt || 'Played as teams: the side with the better average place wins.', 560, ry + 4, 16, '#7a4fc0', 'left', { stroke: false, w: 600 });
   // 1 vs Pack: the actual target for this pack size
   const tgt = m.id === 'sprink' && m.st.pack ? `Target: soak ${m.st.need} of the ${m.st.pack.length} pack pups in ${MGDEF.sprink.dur} s` : m.id === 'sentry' && m.st.pack ? `Target: ${m.st.need} of the ${m.st.pack.length} pack pups reach the treats in ${MGDEF.sentry.dur} s` : '';
   if (tgt) T(`🎯 ${tgt}`, 560, ry + 4, 17, '#d9480f', 'left', { stroke: false, w: 700 });
@@ -7245,7 +7245,7 @@ function mgIntroMove(m, card) {
     T(lab.toUpperCase(), 518, ry + 12, 13, col, 'left', { stroke: false, d: true });
     wrapLeft(txt, 572, ry + 12, 490, 17, 20, INK, 1);
   });
-  if (tm && !m.def.only) T('Played as teams: the better average place wins.', 572, 276, 13, '#7a4fc0', 'left', { stroke: false, w: 600 });
+  if (tm && !m.def.only) T(m.def.teamTxt || 'Played as teams: the better average place wins.', 572, 276, 13, '#7a4fc0', 'left', { stroke: false, w: 600 });
   g.restore();
   // bottom strip: who is ready + their controls
   const n = m.n, sp = Math.min(190, 1180 / n), y = H - 64;
@@ -8972,6 +8972,454 @@ MGDEF.snowball = {
     else if (s.t != null && C.DUR - s.t < 5 && s.t < C.DUR) T('Last few seconds!', W / 2, 112, 22, '#ff5c8a', 'center', { lw: 5 });
   },
 };
+/* --- A8. Dodge the Cannons (new, FFA, 2026-10-31): a round pastel park plaza with toy cannons on the rim. The cannons
+   fire in growing, telegraphed patterns: single aimed shots, then volleys, then fan sweeps, lob rain and crossing
+   spokes; from CANNON.fastT the gaps shrink. Every shot warns first: a rolling ball's lane glows on the ground while the
+   cannon glows (CANNON.rollW), a lobbed ball's landing ring shows from the moment the cannon glows until it lands
+   (lobW + lobT). Rolling balls hit pups on the ground (A = hop clears them); a lob hits every pup inside its ring when it
+   lands. 3 hits = out (the pup trudges to the bench behind the plaza, dizzy). A hit = knockback + a short flinch, then
+   CANNON.inv of harmless contact (the pup flashes). B = shove: shoving a rival into a ball is the tactic.
+   Last pup = 1st, then reverse order of going out (same frame = tie); at the cap, survivors by HP left, then fewest
+   contacts taken (harmless ones count too).
+   State (plain JSON): s.bl = balls, kept small for the snapshots: rolling { id, c (cannon), a (age; < 0 = queued, shown
+   from 0, fires at rollW), d (angle), L (rolling time to the far fence), h (bitmask of pups it already touched) } (start +
+   velocity from cnRoll), lobbed { id, c, k: 1, a (fires at lobW, lands at lobW + lobT), x, z (landing spot) }; s.fx = the last impacts { id, x, z, t, k (pup or
+   -1), ty (0 fence pop, 1 lob landing, 2 pup hit), out }; per pup hp, tk (contacts), iv (no-damage time left), hc (hop
+   cooldown), outAt, ob (bench spot). Cannon spots come from s.nc + s.R (cnPos), never stored. --- */
+const CANNON = {
+  R0: 7,          // GUESS plaza radius base; R = R0 + Rn x pups (2: 7.7, 4: 8.4, 6: 9.1)
+  Rn: .35,        // GUESS
+  NC: [0, 0, 4, 5, 6, 7, 8], // GUESS cannons on the rim by pup count
+  HP: 3,          // GUESS hits to go out
+  inv: 1.2,       // GUESS no-damage time after a hit (flashing)
+  flinch: .3,     // GUESS no-control time on a hit
+  kb: 3.6,        // GUESS knockback speed on a hit
+  DUR: 45,        // GUESS hard cap
+  fastT: 25,      // GUESS play seconds before the cannons speed up
+  fastK: .72,     // GUESS pattern gap x after fastT
+  first: 1.2,     // GUESS first pattern after the start
+  gap0: 1.9,      // GUESS seconds between patterns at the start ...
+  gap1: 1.15,     // GUESS ... easing to this by fastT
+  volT: 7,        // GUESS from here volleys (2-4 cannons at once)
+  sweepT: 15,     // GUESS from here fan sweeps + lob rain
+  crossT: 25,     // GUESS from here crossing spokes (every cannon through the middle)
+  rollW: .8,      // GUESS rolling ball: lane warning before it fires
+  rollV: 6,       // GUESS rolling speed (units/s)
+  rollR: .42,     // GUESS ball radius
+  rollHit: .42,   // GUESS pup half-width for the rolling hit test (the PupMover radius .6 felt unfair against a big ball)
+  clear: .45,     // GUESS a pup this high (hop) lets a rolling ball pass under
+  lobW: .3,       // GUESS lobbed ball: cannon glow (ring already shown) before it fires
+  lobT: .62,      // GUESS lob flight time (ring shows lobW + lobT = .92 s before it lands)
+  lobR: 1.25,     // GUESS lob blast radius (pups inside when it lands are hit, hopping or not)
+  lobH: 4.2,      // GUESS lob arc peak height
+  hopV: 7,        // GUESS hop launch speed (about .64 s in the air)
+  G: 22,          // GUESS gravity
+  hopCd: .2,      // GUESS hop cooldown after landing
+  hopLead: .17,   // GUESS bots press hop this long before a rolling ball reaches them (clear window ~.07-.29 s)
+  hopP: { easy: .6, normal: .7, hard: .8, casual: .7 },    // GUESS chance a bot tries to hop a rolling ball it sees
+  hopErr: { easy: .11, normal: .07, hard: .035, casual: .07 }, // GUESS bot hop timing error (s, sd)
+  mg: { easy: .2, normal: .35, hard: .45, casual: .4 },        // GUESS extra margin bots keep from rings / lanes
+  spdK: .5,       // GUESS bots keep this share of their level's MVLV.spd gap (dodging is reaction, not top speed)
+  see: { easy: .78, normal: .8, hard: .86, casual: .82 },     // GUESS chance a bot notices a shot at all (else it ignores it)
+};
+// cannon i: [x, z, angle on the rim]; muzzle = where its balls start (on the fence line)
+function cnPos(s, i) { const a = -Math.PI / 2 + (i + .5) / s.nc * TAU, r = s.R + 1.25; return [Math.cos(a) * r, Math.sin(a) * r, a]; }
+function cnMuz(s, i) { const a = -Math.PI / 2 + (i + .5) / s.nc * TAU, r = s.R + .3; return [Math.cos(a) * r, Math.sin(a) * r]; }
+// a rolling ball's start + velocity (state keeps only its cannon + angle d)
+function cnRoll(s, b) { const [x, z] = cnMuz(s, b.c); return { x, z, vx: Math.cos(b.d) * CANNON.rollV, vz: Math.sin(b.d) * CANNON.rollV }; }
+MGDEF.cannon = {
+  name: 'Dodge the Cannons', kind: 'Action · Last pup standing', move: true, C: CANNON, /* C: tuning, reachable from the tests */
+  how: 'Toy cannons on the rim fire more and more balls. A glowing lane = a rolling ball is coming: step aside or press Action to hop over it. A red ring = a ball lands there: get out! Three hits and you are out. Push = shove: shove a pup into a cannonball. Last pup standing wins.',
+  Rof: n => CANNON.R0 + CANNON.Rn * n,
+  init(ps) {
+    const C = CANNON, n = ps.length, R = +this.Rof(n).toFixed(2), z = () => ps.map(() => 0);
+    return { ps, n, t: 0, R, nc: C.NC[n] || 6, pm: pmRing(n, R * .5), bk: pmBk(ps).map(b => Object.assign(b, { sn: {} })), hs: 0,
+      bl: [], bid: 0, fx: [], fid: 0, nx: C.first, pn: 0, hp: ps.map(() => C.HP), tk: z(), iv: z(), hc: z(), outAt: ps.map(() => Infinity), ob: ps.map(() => null), no: 0, go: 0 };
+  },
+  lvl: pl => pl && pl.ai === 'casual' ? 'casual' : ['easy', 'normal', 'hard'][cpuLvl(pl)],
+  // hops + gravity (p.y); rolling balls only hit pups below CANNON.clear
+  vert(s, I, dt) {
+    const C = CANNON;
+    s.pm.forEach((p, k) => {
+      s.hc[k] = Math.max(0, s.hc[k] - dt);
+      if (p.out) return;
+      if (p.y <= 0 && p.vy === 0) { if ((I[k] || NOIN).ap && !s.hc[k] && !p.st && !p.lg) { p.vy = C.hopV; s.hc[k] = C.hopCd + .5; } else return; }
+      p.vy -= C.G * dt; p.y += p.vy * dt;
+      if (p.y <= 0) { p.y = 0; p.vy = 0; s.hc[k] = Math.min(s.hc[k], C.hopCd); }
+    });
+  },
+  step(s, I, dt) { pmStep(s, I, dt, { R: s.R, edge: 'wall' }); this.vert(s, I, dt); },
+  practice(s, dt, I) { this.step(s, I, dt); },
+  fxAdd(s, e) { s.fx.push(Object.assign({ id: ++s.fid, t: +s.t.toFixed(2) }, e)); if (s.fx.length > 6) s.fx.shift(); },
+  // ----- shots: a rolling ball from cannon c the way `ang` points, a lob from cannon c onto (x, z); d = delay (queued)
+  roll(s, c, ang, d = 0) {
+    const C = CANNON, [mx, mz] = cnMuz(s, c), ux = Math.cos(ang), uz = Math.sin(ang), L = Math.max(1, -2 * (mx * ux + mz * uz)) / C.rollV; /* chord to the far fence */
+    s.bl.push({ id: ++s.bid, c, a: -d, d: +ang.toFixed(3), L: +L.toFixed(2) });
+  },
+  lob(s, c, x, z, d = 0) {
+    const C = CANNON, r = Math.hypot(x, z), lim = s.R - .4; if (r > lim) { x *= lim / r; z *= lim / r; }
+    s.bl.push({ id: ++s.bid, c, k: 1, a: -d, x: +x.toFixed(1), z: +z.toFixed(1) });
+  },
+  // aim from cannon c at a point (+ spread)
+  aim(s, c, x, z, sp = 0) { const [mx, mz] = cnMuz(s, c); return Math.atan2(z - mz, x - mx) + gauss() * sp; },
+  busy(s, c) { return s.bl.some(b => b.c === c && b.a < (b.k ? CANNON.lobW : CANNON.rollW)); },
+  // a cannon: free ones first, and not the one right behind the target (a point-blank lane is hard to read)
+  pickC(s, x, z, not = []) {
+    const ids = Array.from({ length: s.nc }, (_, i) => i).filter(i => !not.includes(i)), far = ids.filter(i => { const [cx, cz] = cnPos(s, i); return Math.hypot(cx - x, cz - z) > 3.2; });
+    const free = (far.length ? far : ids).filter(i => !this.busy(s, i));
+    return pick(free.length ? free : far.length ? far : ids);
+  },
+  // the next pattern (host): grows from single aimed shots to volleys, fan sweeps, lob rain and crossing spokes
+  pattern(s) {
+    const C = CANNON, t = s.t, al = s.pm.map((p, k) => k).filter(k => !s.pm[k].out); if (!al.length) return;
+    const P = k => s.pm[k], tg = () => pick(al), rnd = Math.random();
+    let kind = 'single';
+    if (t >= C.crossT) kind = rnd < .2 ? 'volley' : rnd < .45 ? 'sweep' : rnd < .7 ? 'cross' : 'rain';
+    else if (t >= C.sweepT) kind = rnd < .35 ? 'volley' : rnd < .7 ? 'sweep' : 'rain';
+    else if (t >= C.volT) kind = rnd < .3 ? 'single' : 'volley';
+    let ex = 1;
+    if (kind === 'single') {
+      const j = tg(), q = P(j), c = this.pickC(s, q.x, q.z);
+      if (Math.random() < .55) this.roll(s, c, this.aim(s, c, q.x, q.z, .06)); else this.lob(s, c, q.x + gauss() * .35, q.z + gauss() * .35);
+    } else if (kind === 'volley') {
+      const m = clamp(Math.ceil(al.length * .7) + (t > 12 ? 1 : 0), 2, 5), used = [], sh = shuffle(al.slice());
+      for (let i = 0; i < m; i++) {
+        const q = P(sh[i % sh.length]), c = this.pickC(s, q.x, q.z, used); used.push(c);
+        if ((i + s.pn) % 2) this.roll(s, c, this.aim(s, c, q.x, q.z, .08), i * .12); else this.lob(s, c, q.x + gauss() * .5, q.z + gauss() * .5, i * .12);
+      }
+      ex = 1.25;
+    } else if (kind === 'sweep') {
+      // one cannon fans 4 rolling balls across a pup; with 4+ pups (or late) a second cannon crosses it
+      const n2 = al.length >= 4 || t >= C.crossT ? 2 : 1, used = [];
+      for (let w = 0; w < n2; w++) {
+        const q = P(tg()), c = this.pickC(s, q.x, q.z, used), a0 = this.aim(s, c, q.x, q.z), dir = Math.random() < .5 ? 1 : -1; used.push(c);
+        for (let i = 0; i < 4; i++) this.roll(s, c, a0 + dir * (i - 1.5) * .3, i * .32 + w * .16);
+      }
+      ex = 1.55;
+    } else if (kind === 'rain') {
+      // lobs on random spots (spaced) + one on 1-2 pups
+      const m = Math.min(9, 3 + al.length), pts = [];
+      shuffle(al.slice()).slice(0, al.length > 3 ? 2 : 1).forEach(j => pts.push([P(j).x + gauss() * .4, P(j).z + gauss() * .4]));
+      for (let tr = 0; pts.length < m && tr < 60; tr++) { const a = rand(0, TAU), r = Math.sqrt(Math.random()) * (s.R - 1), x = Math.cos(a) * r, z = Math.sin(a) * r; if (pts.every(([px, pz]) => Math.hypot(px - x, pz - z) > 2.6)) pts.push([x, z]); }
+      pts.forEach(([x, z], i) => this.lob(s, this.pickC(s, x, z), x, z, i * .14));
+      ex = 1.35;
+    } else {
+      // crossing spokes: every cannon (every other one with 7+) rolls a ball through the middle, odd ones a beat later
+      const st = s.nc >= 7 ? 2 : 1, off = gauss() * .08;
+      for (let c = 0; c < s.nc; c += st) this.roll(s, c, this.aim(s, c, 0, 0) + off, (c / st) % 2 ? .45 : 0);
+      ex = 1.45;
+    }
+    s.pn++;
+    const gp = lerp(C.gap0, C.gap1, clamp(t / C.fastT, 0, 1)) * (t >= C.fastT ? C.fastK : 1);
+    s.nx = +(t + gp * ex).toFixed(2);
+  },
+  hitPup(s, k, dx, dz) {
+    const C = CANNON, p = s.pm[k];
+    s.tk[k]++;
+    if (s.iv[k] > 0) return false; // flashing: a harmless bump
+    s.hp[k]--; s.iv[k] = C.inv;
+    const d = Math.hypot(dx, dz) || 1;
+    p.vx = dx / d * C.kb; p.vz = dz / d * C.kb; p.st = Math.max(p.st, C.flinch); p.lg = 0; p.hit = 0;
+    this.fxAdd(s, { x: +p.x.toFixed(1), z: +p.z.toFixed(1), k, ty: 2 });
+    if (s.hp[k] <= 0) this.knockOut(s, k);
+    return true;
+  },
+  knockOut(s, k) {
+    const p = s.pm[k], j = s.no++;
+    p.out = true; s.outAt[k] = s.t; p.vx = p.vz = 0; p.st = 0; p.y = 0; p.vy = 0;
+    s.ob[k] = [+((j - (s.n - 2) / 2) * 1.6).toFixed(2), +(-(s.R + 2.7)).toFixed(2)]; /* the bench behind the plaza */
+    this.fxAdd(s, { x: +p.x.toFixed(1), z: +p.z.toFixed(1), k, out: 1, ty: 2 });
+  },
+  balls(s, dt) {
+    const C = CANNON, hr = C.rollR + C.rollHit;
+    for (let i = s.bl.length - 1; i >= 0; i--) {
+      const b = s.bl[i]; b.a = +(b.a + dt).toFixed(4);
+      if (!b.k) {
+        const r = cnRoll(s, b);
+        const f = b.a - C.rollW; if (f < 0) continue;
+        if (f >= b.L) { this.fxAdd(s, { x: +(r.x + r.vx * b.L).toFixed(1), z: +(r.z + r.vz * b.L).toFixed(1), ty: 0 }); s.bl.splice(i, 1); continue; }
+        const x = r.x + r.vx * f, z = r.z + r.vz * f;
+        s.pm.forEach((p, k) => {
+          if (p.out || p.y >= C.clear || b.h & (1 << k) || Math.hypot(p.x - x, p.z - z) >= hr) return;
+          b.h |= 1 << k;
+          // knocked along the ball's path, a little sideways away from its centre line
+          const ux = r.vx / C.rollV, uz = r.vz / C.rollV, sd = (p.x - x) * uz - (p.z - z) * ux >= 0 ? 1 : -1;
+          this.hitPup(s, k, ux + uz * sd * .6, uz - ux * sd * .6);
+        });
+      } else if (b.a >= C.lobW + C.lobT) {
+        this.fxAdd(s, { x: b.x, z: b.z, ty: 1 });
+        s.pm.forEach((p, k) => { if (p.out || p.y > 1.6) return; const dx = p.x - b.x, dz = p.z - b.z; if (Math.hypot(dx, dz) < C.lobR + .15) this.hitPup(s, k, dx || .01, dz); });
+        s.bl.splice(i, 1);
+      }
+    }
+  },
+  update(s, dt, I) {
+    const C = CANNON;
+    if (!s.go) { s.go = 1; s.hc.fill(0); s.iv.fill(0); s.bl = []; s.pm.forEach(p => { p.y = 0; p.vy = 0; }); }
+    s.t += dt;
+    s.iv.forEach((v, k) => { s.iv[k] = Math.max(0, v - dt); });
+    this.step(s, I, dt);
+    if (s.t >= s.nx && s.t < C.DUR - .6) this.pattern(s);
+    this.balls(s, dt);
+    if (s.pm.filter(p => !p.out).length <= 1 || s.t >= C.DUR) { s.rank = rankScores(s.pm.map((p, k) => p.out ? s.outAt[k] : 1e9 + s.hp[k] * 1e3 - s.tk[k])); s.done = true; }
+  },
+  // knocked-out pups: a dizzy moment, then trudge to the bench and sit (host; guests get it from the snapshots)
+  anim(s, dt) {
+    if (!s.ob) return;
+    s.pm.forEach((p, k) => {
+      const o = s.ob[k]; if (!p.out || !o || p.sit >= 0 || s.t - s.outAt[k] < .7) return;
+      const dx = o[0] - p.x, dz = o[1] - p.z, d = Math.hypot(dx, dz);
+      if (d < .08) { p.x = o[0]; p.z = o[1]; p.y = 0; p.vx = p.vz = 0; p.sit = 0; p.f = Math.PI / 2; return; }
+      const sp = Math.min(d / Math.max(dt, 1e-3), 4.2); p.vx = dx / d * sp; p.vz = dz / d * sp; p.x += p.vx * dt; p.z += p.vz * dt; p.f = Math.atan2(dz, dx); p.y = Math.abs(Math.sin(d * 2.6)) * .16;
+    });
+  },
+  // ----- bots: every threat is seen one reaction time after its warning shows (b.sn[id].rt); the plan picks the spot
+  // with the least danger (rings, lanes ahead of a ball), away from the rim and rivals; rolling balls are hopped with a
+  // per-level chance + timing error; now and then a shove at a rival standing in danger
+  seen(s, b, pl) {
+    for (const x of s.bl) if (x.a >= 0 && !b.sn[x.id]) b.sn[x.id] = { rt: botRT(pl), ok: Math.random() < CANNON.see[this.lvl(pl)], hp: Math.random() < CANNON.hopP[this.lvl(pl)], er: gauss() * CANNON.hopErr[this.lvl(pl)] };
+    return s.bl.filter(x => x.a >= 0 && b.sn[x.id] && b.sn[x.id].ok && x.a >= b.sn[x.id].rt);
+  },
+  danger(s, x, z, th, mg) {
+    const C = CANNON; let c = 0;
+    for (const b of th) {
+      if (b.k) { if (b.a > C.lobW + C.lobT) continue; const d = Math.hypot(x - b.x, z - b.z), r = C.lobR + .5 + mg; if (d < r) c += 6 + (r - d) * 2; continue; }
+      const r = cnRoll(s, b), f = Math.max(0, b.a - C.rollW), ux = r.vx / C.rollV, uz = r.vz / C.rollV, rx = x - (r.x + r.vx * f), rz = z - (r.z + r.vz * f);
+      const al = rx * ux + rz * uz, lat = Math.abs(rx * uz - rz * ux), w = C.rollR + C.rollHit + .3 + mg;
+      if (al > -.6 && lat < w) c += 2.5 + (w - lat);
+    }
+    return c;
+  },
+  plan(s, k, L) {
+    const C = CANNON, p = s.pm[k], b = s.bk[k], pl = s.ps[k], mg = C.mg[this.lvl(pl)], th = this.seen(s, b, pl);
+    // shove: a rival right next to me standing in danger (or now and then anyway)
+    const j = pmNear(s, k, p.x, p.z, q => q.ns <= 0 && q.y <= 0);
+    if (j >= 0) { const q = s.pm[j]; if (Math.hypot(q.x - p.x, q.z - p.z) < 1.8 && Math.random() < L.shv * (this.danger(s, q.x, q.z, th, 0) > 0 ? .5 : .08)) return { x: q.x, z: q.z, sh: j }; }
+    const lim = s.R - 1.1; let best = [p.x, p.z], bc = 1e9;
+    const cost = (x, z) => {
+      const r = Math.hypot(x, z); if (r > lim) return 1e9;
+      let c = this.danger(s, x, z, th, mg) + Math.hypot(x - p.x, z - p.z) * .22 + Math.max(0, r - (s.R - 2.4)) * 1.2 + r * .05;
+      s.pm.forEach((o, jj) => { if (jj !== k && !o.out && Math.hypot(o.x - x, o.z - z) < 1.6) c += .8; });
+      return c;
+    };
+    bc = cost(p.x, p.z);
+    for (let i = 0; i < 12; i++) for (const d of [1.3, 2.6, 4]) {
+      const a = i / 12 * TAU + (k * .37), x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d, c = cost(x, z);
+      if (c < bc - .05) { bc = c; best = [x, z]; }
+    }
+    return { x: best[0], z: best[1] };
+  },
+  bot(s, k, dt) {
+    const C = CANNON, p = s.pm[k], b = s.bk[k], pl = s.ps[k];
+    if (p.out) return AX0;
+    const th = this.seen(s, b, pl);
+    const o = Object.assign({}, pmBot.call(this, s, k, dt, this.plan, { R: s.R, margin: 1.4 })), L = mvLv(pl), sk = (1 - (1 - L.spd) * C.spdK) / L.spd;
+    o.a = false; if (!o.b) { o.mx *= sk; o.my *= sk; }
+    if (p.y > 0 || p.vy !== 0 || s.hc[k]) return o;
+    // hop a rolling ball about to reach me (judged once per ball: tried or not, with a timing error)
+    for (const x of th) {
+      const e = b.sn[x.id]; if (x.k || !e.hp || e.done) continue;
+      const r = cnRoll(s, x), f = x.a - C.rollW, ux = r.vx / C.rollV, uz = r.vz / C.rollV, bx = r.x + r.vx * Math.max(0, f), bz = r.z + r.vz * Math.max(0, f);
+      const rx = p.x - bx, rz = p.z - bz, al = rx * ux + rz * uz, lat = Math.abs(rx * uz - rz * ux);
+      if (lat > C.rollR + C.rollHit + .2 || al < -.2) continue;
+      const tA = Math.max(0, al - C.rollR - C.rollHit) / C.rollV + Math.max(0, -f);
+      if (tA <= C.hopLead + e.er) { o.a = true; e.done = 1; break; }
+    }
+    return o;
+  },
+  score(s, k) { const p = s.pm[k]; if (p.out) return `Out ${ORD[s.rank ? s.rank[k] : 0] || ''}`; return s.pm.filter(q => !q.out).length > 1 ? `Survived · ${s.hp[k]}/${CANNON.HP}` : 'Last pup'; },
+  // ----- view: pastel park plaza, picket fence, toy cannons, glowing lanes + landing rings, balls with shadows
+  view(s) {
+    const C = CANNON, R = s.R, v = mgBase('#c9ecff', '#a7db86', 170);
+    mgSky(v, '#8fd3ff', '#ffeaf2'); v.scene.fog.near = 34; v.scene.fog.far = 86;
+    mgStripes(v, '#a7db86', '#9dd27d', 60);
+    // the plaza: pastel rings of paving + a flower in the middle (one canvas on a disc)
+    const pt = texCanvas(512, (c, n) => {
+      const h = n / 2, ring = (r0, r1, col) => { c.beginPath(); c.arc(h, h, r1, 0, TAU); c.arc(h, h, r0, 0, TAU, true); c.fillStyle = col; c.fill(); };
+      c.fillStyle = '#fff4dc'; c.fillRect(0, 0, n, n);
+      const cols = ['#fff4dc', '#ffe3ea', '#fff4dc', '#e2f4e0', '#fff4dc', '#e8e2fb'];
+      for (let i = 0; i < 6; i++) ring(h * (i / 6), h * ((i + 1) / 6), cols[i]);
+      c.strokeStyle = 'rgba(200,170,150,.35)'; c.lineWidth = 2;
+      for (let i = 1; i < 6; i++) { c.beginPath(); c.arc(h, h, h * i / 6, 0, TAU); c.stroke(); const m = 6 + i * 6; for (let j = 0; j < m; j++) { const a = j / m * TAU, r0 = h * (i - 1) / 6, r1 = h * i / 6; if (i === 1) continue; c.beginPath(); c.moveTo(h + Math.cos(a) * r0, h + Math.sin(a) * r0); c.lineTo(h + Math.cos(a) * r1, h + Math.sin(a) * r1); c.stroke(); } }
+      for (let j = 0; j < 8; j++) { const a = j / 8 * TAU; c.beginPath(); c.ellipse(h + Math.cos(a) * h * .09, h + Math.sin(a) * h * .09, h * .07, h * .035, a, 0, TAU); c.fillStyle = '#ffb3c8'; c.fill(); }
+      c.beginPath(); c.arc(h, h, h * .05, 0, TAU); c.fillStyle = '#ffd86b'; c.fill();
+    });
+    const plaza = new THREE.Mesh(new THREE.CircleGeometry(R + .3, 72).rotateX(-Math.PI / 2), texMat(pt, { color: '#ffffff' })); plaza.position.y = .01; plaza.receiveShadow = true; plaza.userData.noInk = true; v.scene.add(plaza);
+    const curb = new THREE.Mesh(new THREE.RingGeometry(R + .3, R + .85, 72).rotateX(-Math.PI / 2), mat('#d9cdf2')); curb.position.y = .02; curb.receiveShadow = true; curb.userData.noInk = true; v.scene.add(curb);
+    // rim dressing (baked): picket fence ring, trees + bushes + flowers on the back and sides, a bench behind the plaza
+    const A = new THREE.Group(), nf = 26, Rf = R + .6;
+    for (let i = 0; i < nf; i++) { const a0 = i / nf * TAU, a1 = (i + 1) / nf * TAU; mgaFence(A, Math.cos(a0) * Rf, Math.sin(a0) * Rf, Math.cos(a1) * Rf, Math.sin(a1) * Rf, 1.2); }
+    for (let i = 0; i < 11; i++) { const a = Math.PI * (1.06 + i / 10 * .88), r = R + 4.2 + (i % 2) * 1.5; mgaTree(A, Math.cos(a) * r, Math.sin(a) * r * .92 - 1, 1.05 + (i % 3) * .15, i); }
+    for (let i = 0; i < 16; i++) { const a = Math.PI * (.95 + i / 15 * 1.1), r = R + 2.6 + (i % 3) * .35; if (i % 2) mgaBush(A, Math.cos(a) * r, Math.sin(a) * r, .7 + (i % 3) * .12, i); else mgaFlower(A, Math.cos(a) * r, Math.sin(a) * r, 1, i); }
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 3; i++) mgaTree(A, sx * (R + 4 + i * 1.2), -.5 + i * 2.8, .95 + i * .1, i + (sx > 0 ? 5 : 2));
+      for (let i = 0; i < 6; i++) mgaFlower(A, sx * (R + 2.3 + (i % 2) * .6), R * .25 + i * .7, 1.1, i + 3);
+    }
+    const bz = -(R + 2.75), bw = Math.max(5, (s.n - 1) * 1.6 + 1.4);
+    M(GEO.box, '#ffb3c8', 0, .42, bz, A, bw, .12, .6); M(GEO.box, '#ffb3c8', 0, .75, bz - .3, A, bw, .5, .1);
+    for (const sx of [-1, 1]) M(GEO.box, '#8a6a9a', sx * (bw / 2 - .3), .2, bz, A, .14, .4, .5);
+    mgaBake(v, A);
+    // toy cannons: pastel carriage + wheels, a plum barrel on a yaw/pitch pivot (own material: glows on a warning)
+    const PAST = ['#ff9ec1', '#9fe3c8', '#bba6ff', '#ffc38a', '#8fd3ff', '#ffe27a', '#ffa8a8', '#c6f08a'];
+    v.cn = Array.from({ length: s.nc }, (_, i) => {
+      const [x, z, a] = cnPos(s, i), gp = new THREE.Group(); gp.position.set(x, 0, z); gp.rotation.y = -(a + Math.PI); v.scene.add(gp); /* local +x = toward the middle */
+      const col = PAST[i % PAST.length];
+      M(GEO.cyl, '#fff4dc', 0, .1, 0, gp, .78, .2, .78);
+      M(GEO.box, col, -.05, .5, 0, gp, .95, .42, .62);
+      for (const sz of [-1, 1]) { const w = M(GEO.cyl, '#ffe27a', -.1, .42, sz * .4, gp, .36, .12, .36); w.rotation.x = Math.PI / 2; M(GEO.sph, col, -.1, .42, sz * .47, gp, .1); }
+      const yaw = new THREE.Group(); yaw.position.set(0, .82, 0); gp.add(yaw);
+      const pit = new THREE.Group(); yaw.add(pit);
+      const bm = new THREE.MeshToonMaterial({ color: '#5f4b80', gradientMap: GRAD, emissive: new THREE.Color(0) });
+      const brl = new THREE.Group(); pit.add(brl);
+      const tube = M(GEO.cyl, bm, .2, 0, 0, brl, .27, 1.25, .27); tube.rotation.z = -Math.PI / 2;
+      M(GEO.sph, bm, -.42, 0, 0, brl, .31);
+      const lip = M(GEO.torus, '#ffd23f', .84, 0, 0, brl, .27); lip.rotation.y = Math.PI / 2;
+      const band = M(GEO.torus, '#ffd23f', -.05, 0, 0, brl, .29, .29, .5); band.rotation.y = Math.PI / 2;
+      M(GEO.sph, '#2a1d32', .9, 0, 0, brl, .02, .19, .19).castShadow = false; /* the dark bore */
+      const fuse = M(GEO.sph, new THREE.MeshBasicMaterial({ color: '#ffd23f' }), -.62, .3, 0, brl, .08); fuse.userData.noInk = true; fuse.castShadow = false;
+      return { gp, yaw, pit, brl, bm, fuse, base: a + Math.PI, ya: 0, pa: 0, fire: -9 };
+    });
+    // telegraphs: lane stripes (chevrons scroll toward the far fence) + landing rings with a filling disc, pooled
+    const chev = texCanvas(64, (c, n) => { c.clearRect(0, 0, n, n); c.fillStyle = 'rgba(255,255,255,.95)'; c.beginPath(); c.moveTo(n * .2, n * .12); c.lineTo(n * .55, n * .5); c.lineTo(n * .2, n * .88); c.lineTo(n * .42, n * .88); c.lineTo(n * .77, n * .5); c.lineTo(n * .42, n * .12); c.closePath(); c.fill(); });
+    const gL = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), gR = new THREE.RingGeometry(.84, 1, 44).rotateX(-Math.PI / 2), gD = new THREE.CircleGeometry(1, 44).rotateX(-Math.PI / 2);
+    const tmat = (col, map) => new THREE.MeshBasicMaterial({ color: col, map: map || null, transparent: true, opacity: 0, depthWrite: false });
+    v.lanes = Array.from({ length: 28 }, () => {
+      const t = chev.clone(); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true;
+      const base = new THREE.Mesh(gL, tmat('#ff7a59')), ar = new THREE.Mesh(gL, tmat('#fff3e0', t));
+      for (const m of [base, ar]) { m.userData.noInk = true; m.renderOrder = 2; m.visible = false; v.scene.add(m); }
+      base.position.y = .035; ar.position.y = .04; return { base, ar, t };
+    });
+    v.rings = Array.from({ length: 20 }, () => {
+      const r = new THREE.Mesh(gR, tmat('#ff5a3c')), d = new THREE.Mesh(gD, tmat('#ff7a59'));
+      for (const m of [r, d]) { m.userData.noInk = true; m.renderOrder = 2; m.visible = false; v.scene.add(m); }
+      r.position.y = .045; d.position.y = .04; return { r, d };
+    });
+    // balls (+ ink shell) and ground shadows: instanced
+    const NBL = 40, gS = new THREE.SphereGeometry(1, 16, 12);
+    const mk = (geo, m) => { const im = new THREE.InstancedMesh(geo, m, NBL); im.userData.noInk = true; im.castShadow = false; im.frustumCulled = false; im.count = 0; v.scene.add(im); return im; };
+    v.ball = mk(gS, new THREE.MeshToonMaterial({ color: '#4d3f68', gradientMap: GRAD })); v.ball.castShadow = true;
+    v.shine = mk(new THREE.SphereGeometry(1, 8, 6), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: .55, depthWrite: false }));
+    v.ink = mk(gS, new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide }));
+    v.shd = mk(new THREE.CircleGeometry(1, 18).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#6b5a7e', transparent: true, opacity: .26, depthWrite: false })); v.shd.renderOrder = 1;
+    v.mx = new THREE.Matrix4(); v.q = new THREE.Quaternion(); v.p3 = new THREE.Vector3(); v.s3 = new THREE.Vector3(); v.e = new THREE.Euler(); v.c0 = new THREE.Color(0); v.cG = new THREE.Color('#ff6a2a');
+    v.fxSeen = s.fx.length ? s.fx[s.fx.length - 1].id : 0; /* a guest joining mid-game doesn't replay old puffs */
+    v.fired = {}; s.bl.forEach(b => { if (b.a >= (b.k ? C.lobW : C.rollW)) v.fired[b.id] = 1; });
+    addPups(v, s.ps);
+    const kc = (R + 2.6) / 8.6;
+    v.cam.position.set(0, 15.2 * kc, 12.4 * kc); v.cam.lookAt(0, 0, -.6);
+    return pmView(v);
+  },
+  sync(s, v) {
+    const C = CANNON;
+    if (!v.dust) mgDust(v, '#fff6e6', 72); dustTick(v);
+    // guests get 15 snapshots a second: balls move on from the last one by the view clock
+    if (s.t !== v.st0) { v.st0 = s.t; v.stN = NOW; }
+    const ext = MS && MS.phase === 'play' ? Math.min(.1, NOW - (v.stN || NOW)) : 0;
+    // cannons: aim at their newest warning / flying shot, glow while warning, recoil + muzzle puff when firing
+    const aimT = v.cn.map(() => null), glow = v.cn.map(() => 0);
+    for (const b of s.bl) {
+      const a = b.a + ext, w = b.k ? C.lobW : C.rollW, o = v.cn[b.c]; if (a < 0 || !o) continue;
+      if (a < w) { glow[b.c] = Math.max(glow[b.c], a / w); aimT[b.c] = b; }
+      else if (!aimT[b.c]) aimT[b.c] = b;
+      if (a >= w && !v.fired[b.id]) {
+        v.fired[b.id] = 1; o.fire = NOW;
+        const [mx, mz] = cnMuz(s, b.c); dustPuff(v, mx, .9, mz, 6, 1.2, 1.1); if (SFX.whoosh && vR() < .7) sfx('whoosh');
+      }
+    }
+    v.cn.forEach((o, i) => {
+      const b = aimT[i]; let ya = 0, pa = .08;
+      if (b) {
+        const [mx, mz] = cnMuz(s, i), aw = b.k ? Math.atan2(b.z - mz, b.x - mx) : b.d;
+        ya = wrapA(aw - o.base); pa = b.k ? .75 : -.06;
+      }
+      o.ya += wrapA(ya - o.ya) * .25; o.pa += (pa - o.pa) * .25;
+      o.yaw.rotation.y = -o.ya; o.pit.rotation.z = o.pa;
+      const g2 = glow[i], u = (NOW - o.fire) / .3, rc = u >= 0 && u < 1 ? Math.sin(Math.min(1, u * 4) * Math.PI / 2) * (1 - u) : 0;
+      o.brl.position.x = -rc * .32; o.gp.scale.set(1 + rc * .06, 1 - rc * .08, 1 + rc * .06);
+      o.bm.emissive.copy(v.c0).lerp(v.cG, g2 > 0 ? (.35 + .65 * g2) * (.6 + .4 * Math.sin(NOW * 34)) : 0);
+      o.fuse.visible = g2 > 0; if (g2 > 0) o.fuse.scale.setScalar(.08 + .05 * Math.sin(NOW * 40));
+    });
+    // telegraphs from the balls: lanes (warning = pulsing, then fading while it rolls), rings (fill to the landing)
+    let nl = 0, nr = 0;
+    for (const b of s.bl) {
+      const a = b.a + ext; if (a < 0) continue;
+      if (!b.k && nl < v.lanes.length) {
+        const ln = v.lanes[nl++], r = cnRoll(s, b), sp = C.rollV, len = b.L * sp, ux = r.vx / sp, uz = r.vz / sp, f = a - C.rollW;
+        const st = Math.max(0, f) * sp, l2 = Math.max(.01, len - st), cx = r.x + ux * (st + l2 / 2), cz = r.z + uz * (st + l2 / 2), ang = Math.atan2(uz, ux);
+        const op = f < 0 ? .3 + .3 * (a / C.rollW) + .12 * Math.sin(NOW * (14 + a * 16)) : Math.max(0, .32 - f * .12);
+        for (const m of [ln.base, ln.ar]) { m.visible = op > .01; m.position.x = cx; m.position.z = cz; m.rotation.y = -ang; m.scale.set(l2, 1, (C.rollR + C.rollHit) * 2); }
+        ln.base.material.opacity = op * .75; ln.ar.material.opacity = Math.min(1, op * 1.5);
+        ln.t.repeat.set(l2 / 1.1, 1); ln.t.offset.x = -NOW * 1.6;
+      } else if (b.k === 1 && nr < v.rings.length) {
+        const rg = v.rings[nr++], T2 = C.lobW + C.lobT, u = clamp(a / T2, 0, 1);
+        rg.r.visible = rg.d.visible = true;
+        rg.r.position.set(b.x, rg.r.position.y, b.z); rg.d.position.set(b.x, rg.d.position.y, b.z);
+        rg.r.scale.set(C.lobR, 1, C.lobR); rg.d.scale.setScalar(Math.max(.01, C.lobR * u)); rg.d.scale.y = 1;
+        rg.r.material.opacity = .65 + .3 * Math.sin(NOW * (10 + u * 18)); rg.d.material.opacity = .22 + .2 * u;
+      }
+    }
+    for (let i = nl; i < v.lanes.length; i++) v.lanes[i].base.visible = v.lanes[i].ar.visible = false;
+    for (let i = nr; i < v.rings.length; i++) v.rings[i].r.visible = v.rings[i].d.visible = false;
+    // balls: rolling on the ground, lobs in an arc from the muzzle; shadows shrink with height
+    let n = 0;
+    const put = (x, y, z, r) => {
+      if (n >= 40) return;
+      v.mx.compose(v.p3.set(x, y, z), v.q.identity(), v.s3.set(r, r, r)); v.ball.setMatrixAt(n, v.mx);
+      v.mx.compose(v.p3, v.q, v.s3.set(r * 1.14, r * 1.14, r * 1.14)); v.ink.setMatrixAt(n, v.mx);
+      v.mx.compose(v.p3.set(x - r * .35, y + r * .42, z + r * .3), v.q, v.s3.set(r * .26, r * .2, r * .26)); v.shine.setMatrixAt(n, v.mx);
+      const k2 = clamp(1.15 - y * .14, .35, 1); v.mx.compose(v.p3.set(x, .03, z), v.q, v.s3.set(r * 1.25 * k2, 1, r * 1.25 * k2)); v.shd.setMatrixAt(n, v.mx); n++;
+    };
+    for (const b of s.bl) {
+      const a = b.a + ext;
+      if (!b.k) { const r = cnRoll(s, b), f = a - C.rollW; if (f < 0 || f > b.L) continue; put(r.x + r.vx * f, C.rollR, r.z + r.vz * f, C.rollR); }
+      else {
+        const f = a - C.lobW; if (f < 0) continue; const u = clamp(f / C.lobT, 0, 1), [mx, mz] = cnMuz(s, b.c);
+        put(lerp(mx, b.x, u), lerp(1.1, C.rollR * .9, u) + C.lobH * 4 * u * (1 - u), lerp(mz, b.z, u), C.rollR * .95);
+      }
+    }
+    for (const m of [v.ball, v.ink, v.shine, v.shd]) { m.count = n; m.instanceMatrix.needsUpdate = true; }
+    // impacts (from s.fx, once each): fence pops, landing bursts, hit puffs
+    for (const e of s.fx) {
+      if (e.id <= v.fxSeen) continue; v.fxSeen = e.id;
+      if (e.out) { dustPuff(v, e.x, .5, e.z, 10, 1.8, 1.3); continue; }
+      if (e.ty === 1) { dustPuff(v, e.x, .2, e.z, 14, 2.4, 1.3); if (SFX.pop) sfx('pop'); }
+      else if (e.ty === 0) dustPuff(v, e.x, .4, e.z, 6, 1.3, 1);
+      else { dustPuff(v, e.x, .8, e.z, 8, 1.6, 1); if (e.k >= 0) mgRe(v, e.k, 'surprise'); }
+    }
+    // pups: hop = tuck + landing squash (hopAct), flinch / dizzy (pmPose), flashing while harmless, dizzy on the bench
+    s.pm.forEach((p, k) => {
+      const air = !p.out && p.y > .001, h = hopAct(v, k, air ? p.y : 0);
+      let ex;
+      if (p.out) ex = p.sit >= 0 ? { emote: 'dizzy', et: .6, hold: true } : s.t - s.outAt[k] < .7 ? { emote: 'dizzy', et: .5, hold: true } : { emote: 'sad', et: .6, hold: true };
+      else if (p.lg > 0 || p.st > 0) ex = reOpt(v, k);
+      else ex = Object.assign({ sq: h.sq, act: h.act }, reOpt(v, k));
+      pmPose(s, v, k, 0, ex);
+      const o = v.pups[k];
+      if (o && !p.out && s.iv[k] > 0 && s.iv[k] < C.inv - .25) o.visible = Math.floor(NOW * 14) % 2 === 0; /* flashing: harmless for now */
+      const m = mgMem(v, k); if (m.wasAir && !air && !p.out) dustPuff(v, p.x, .05, p.z, 3, .8, .8); m.wasAir = air;
+    });
+    pmFx(s, v);
+  },
+  hud(s, v) {
+    const C = CANNON, pips = (x, y, hp, r = 6) => { for (let i = 0; i < C.HP; i++) { g.beginPath(); g.arc(x + (i - (C.HP - 1) / 2) * (r * 2.6), y, r, 0, TAU); g.fillStyle = i < hp ? '#ff6f91' : '#9a93a8'; g.fill(); g.lineWidth = 2.2; g.strokeStyle = INK; g.stroke(); } };
+    s.pm.forEach((p, k) => {
+      const [x, y] = toScreen(p.x, 2.3 + p.y, p.z, v.cam);
+      tag(s.ps[k], x, y, p.out ? 'Out!' : null, p.out ? '#ffb0c0' : '#fff');
+      if (!p.out) pips(x, y - 22, s.hp[k], 5);
+    });
+    pmHud(s, v, 2.3);
+    for (const e of s.fx) { if (!e.out) continue; const a = s.t - e.t; if (a < 0 || a > .9) continue; const [x, y] = toScreen(e.x, 2.6, e.z, v.cam), sc = .6 + easeBack(clamp(a / .15, 0, 1)) * .6; g.save(); g.translate(x, y - 40 - a * 30); g.scale(sc, sc); g.globalAlpha = clamp((.9 - a) / .25, 0, 1); T('OUT!', 0, 0, 34, '#ff5c8a', 'center', { lw: 6 }); g.restore(); }
+    if (s.t != null && MS && MS.phase !== 'intro') T(`⏱ ${Math.max(0, C.DUR - s.t).toFixed(0)} s`, W / 2, 30, 26, '#fff', 'center', { lw: 5 });
+    const cw = 110, x0 = W / 2 - s.n * cw / 2 + cw / 2;
+    s.ps.forEach((pl, k) => {
+      const out = s.pm[k].out, x = x0 + k * cw, y = 70;
+      g.save(); g.globalAlpha = out ? .6 : 1; rr(x - 52, y - 16, 104, 32, 15); g.fillStyle = out ? '#a39cae' : pl.col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+      T(pl.name.slice(0, 7), x - 15, y + 1, 13, out ? '#e9e5ee' : '#fff', 'center', { lw: 3 }); pips(x + 29, y + 1, out ? 0 : s.hp[k], 4); g.restore();
+    });
+    if (s.t > C.fastT && s.t < C.fastT + 2.6) T('The cannons speed up!', W / 2, 112, 22, '#ff5c8a', 'center', { lw: 5 });
+    else if (s.t != null && C.DUR - s.t < 5 && s.t < C.DUR) T('Last few seconds!', W / 2, 112, 22, '#ff5c8a', 'center', { lw: 5 });
+  },
+};
 Object.assign(MGCARD, {
   asumo: { ic: 'bolt', btn: 'move', ctl: 'move', goal: 'Be the last pup on the raft.', press: 'Run around the raft.', push: 'Shove a pup into the pool!', score: 'Fall in and you are out. The raft shrinks.', tip: 'Shove them off the edge!' },
   acush: { ic: 'note', btn: 'move', ctl: 'move', goal: 'Sit on a cushion when the music stops.', press: 'Run! When the music stops, run onto a cushion.', push: 'Shove a sitter off its cushion.', score: 'No cushion when the timer ends = out.', tip: 'Music stops: grab a cushion!' },
@@ -8981,6 +9429,361 @@ Object.assign(MGCARD, {
   sink: { ic: 'swirl', btn: 'move', ctl: 'move', goal: 'Be the last pup still standing.', press: 'Keep moving: tiles drop after you step on them. Action = hop.', push: 'Shove a pup into a hole!', score: 'Fall through the bottom floor and you are out.', tip: 'Keep moving · Hop over holes!' },
   snowball: { ic: 'ball', btn: 'move', ctl: 'move', goal: 'Be the last pup still in the snowball fight.', press: 'Hold Action to scoop a snowball, let go to throw it.', push: 'A shove knocks the ball out of their paws.', score: 'Three hits and you are out. Hide behind the snow walls!', tip: 'Hold to scoop · Let go to throw!' },
 });
+MGCARD.cannon = { ic: '💥', btn: 'move', ctl: 'move', goal: 'Be the last pup still standing.', press: 'Dodge the cannonballs. Action = hop over a rolling ball.', push: 'Shove a pup into a cannonball!', score: 'Three hits and you are out. A red ring = a ball lands there, get out!', tip: 'Hop balls · Leave red rings!' };
+/* --- A9. Fetch Frenzy (new, FFA / teams, 2026-10-31): tennis balls drop onto a park lawn (a shadow + ring shows where,
+   FFETCH.fall s before they land) from a seeded spawner that keeps FFETCH.NB balls on the field. Each pup has a basket
+   in its colour on the rim (team rounds: one shared basket per team). Carry ONE ball at a time (held over the head,
+   x FFETCH.carry speed): walk over a ball or press Action near one to pick it up; walk into your basket = it scores
+   (golden ball = FFETCH.goldV). Action while carrying = toss it a short way forward (a toss that lands in a basket
+   scores for that basket). B = shove: a landed shove on a carrier knocks the ball out (it bounces a little away).
+   Most balls at FFETCH.DUR wins (ties share, rankScores). Team rounds: the better basket total PER PUP wins (fair for
+   uneven sides, teamEnd), so the game sets s.win itself and teamResult is not used.
+   State (plain JSON): s.bl balls { id, s (0 falling, 1 on the lawn, 2 carried, 3 flying), x, z, a (age in that state),
+   g (1 = golden), k (carrier), vx, vz, T, h (flight: velocity, time, arc height) }; s.bs baskets [x, z]; s.own[k] =
+   pup k's basket; s.bc basket totals; s.sc balls each pup delivered; s.cr[k] = carried ball id (0 = none); s.fx last
+   scores { id, b, k, v, t }; s.rs = the spawner's seed (LCG). --- */
+const FFETCH = {
+  DUR: 40,       // GUESS play seconds
+  R0: 6.6,       // GUESS lawn radius base; R = R0 + Rn x pups (2: 7.4, 4: 8.2, 6: 9)
+  Rn: .4,        // GUESS
+  NB: [0, 0, 3, 3, 4, 4, 5], // GUESS balls kept on the field (falling + on the lawn) by pup count
+  gap: .35,      // GUESS seconds between two spawns while the field is short
+  fall: .85,     // GUESS warning (shadow + ring) before a ball lands
+  dropY: 7,      // GUESS a falling ball's start height
+  goldP: .1,     // GUESS chance a new ball is golden (max one golden on the field)
+  goldV: 3,      // GUESS points for a golden ball
+  ballR: .24,    // GUESS ball radius (drawn x1.25 so it reads)
+  autoR: .85,    // GUESS walk-over pickup distance (pup centre to ball)
+  grabR: 1.35,   // GUESS Action pickup reach
+  bR: .62,       // GUESS basket radius (an obstacle; touching it while carrying scores)
+  bIn: .85,      // GUESS a flying ball landing this close to a basket centre goes in
+  rimIn: 1,      // GUESS basket centres this far inside the lawn edge
+  carry: .85,    // speed x while carrying (spec)
+  tossD: 3.4,    // GUESS toss distance
+  tossT: .55,    // GUESS toss flight time
+  tossH: 1.5,    // GUESS toss arc height
+  dropD: 1.7,    // GUESS knocked-out ball: distance
+  dropT: .45,    // GUESS knocked-out ball: flight time
+  dropH: .9,     // GUESS knocked-out ball: arc height
+  heldY: 2.2,    // view: carried ball height over the pup
+  spdK: { easy: .35, normal: .5, hard: .5, casual: .5 }, // GUESS bots keep this share of their level's MVLV.spd gap (like Paint: fetching = top speed; easy less, it was ~2 % at .5)
+  shR: 2.6,      // GUESS bots consider shoving a rival carrier this close
+  shK: { easy: .15, normal: .55, hard: .85, casual: .55 },  // GUESS x MVLV.shv: chance per plan to go for that shove
+  cont: { easy: 0, normal: .6, hard: 1, casual: .5 },       // GUESS how much bots avoid balls a rival is closer to
+  seeFall: { easy: .45, normal: .15, hard: 0, casual: .2 }, // GUESS bots head for a falling ball (its shadow) once it has shown this long
+  tossP: { easy: 0, normal: .25, hard: .6, casual: .25 },    // GUESS chance a bot tosses when its basket is about a toss away
+};
+// seeded spawner RNG (state-only, so a replay with the same seed drops the same balls)
+function ffRnd(s) { s.rs = (Math.imul(s.rs, 1664525) + 1013904223) >>> 0; return s.rs / 4294967296; }
+MGDEF.ffetch = {
+  name: 'Fetch Frenzy', kind: 'Action · Most balls fetched', move: true, teamSafe: true, C: FFETCH, /* C: tuning, reachable from the tests */
+  how: 'Tennis balls drop onto the lawn: a shadow shows where. Grab one (walk over it or press Action) and carry it into your basket. You can only carry one, and you are a bit slower with it. Action while carrying = toss it. Push = shove: shove a carrier and the ball drops. Most balls when time runs out wins.',
+  // team rounds: one basket per side (shown on the intro card instead of the "average place" line)
+  teamTxt: 'Played as teams: one basket per side, most balls per pup wins.',
+  Rof: n => FFETCH.R0 + FFETCH.Rn * n,
+  init(ps, opts = {}) {
+    const C = FFETCH, n = ps.length, R = +this.Rof(n).toFixed(2), tm = opts.teams || null, z = () => ps.map(() => 0);
+    let bs, own, pm;
+    if (tm) {
+      // two baskets, left (team 0) and right (team 1); each side starts in its own half
+      const r = R - C.rimIn; bs = [[-r, 0], [r, 0]]; own = tm.slice();
+      const cnt = [0, 0], tot = [tm.filter(t => !t).length, tm.filter(t => t).length];
+      pm = ps.map((p, k) => { const t = tm[k], j = cnt[t]++, zz = (j - (tot[t] - 1) / 2) * 1.6, x = (t ? 1 : -1) * R * .38; return pmNew(x, zz, t ? Math.PI : 0); });
+    } else {
+      bs = ps.map((p, k) => { const a = -Math.PI / 2 + (k + .5) / n * TAU, r = R - C.rimIn; return [+(Math.cos(a) * r).toFixed(2), +(Math.sin(a) * r).toFixed(2)]; });
+      own = ps.map((p, k) => k);
+      pm = ps.map((p, k) => { const a = -Math.PI / 2 + (k + .5) / n * TAU, r = R * .45; return pmNew(Math.cos(a) * r, Math.sin(a) * r, a + Math.PI); });
+    }
+    return { ps, n, t: 0, R, pm, bk: pmBk(ps).map(b => Object.assign(b, { la: false, toss: 0 })), hs: 0, bl: [], bid: 0, nx: 0, rs: (Math.random() * 4294967296) >>> 0,
+      bs, own, bc: bs.map(() => 0), sc: z(), cr: z(), fx: [], fid: 0, go: 0 };
+  },
+  lvl: pl => pl && pl.ai === 'casual' ? 'casual' : ['easy', 'normal', 'hard'][cpuLvl(pl)],
+  obs(s) { return s.bs.map(([x, z]) => [x, z, FFETCH.bR]); },
+  ball(s, id) { return id ? s.bl.find(b => b.id === id) : null; },
+  step(s, I, dt) { return pmStep(s, I, dt, { R: s.R, edge: 'wall', obs: this.obs(s), spd: k => s.cr[k] ? FFETCH.carry : 1 }); },
+  practice(s, dt, I) { this.step(s, I, dt); },
+  // a new falling ball on a free spot (away from baskets, other balls and the rim), from the seeded RNG
+  spawn(s, delay = 0) {
+    const C = FFETCH; let x = 0, z = 0;
+    for (let tr = 0; tr < 24; tr++) {
+      const a = ffRnd(s) * TAU, r = Math.sqrt(ffRnd(s)) * (s.R - 1.5); x = Math.cos(a) * r; z = Math.sin(a) * r;
+      if (s.bs.every(([bx, bz]) => Math.hypot(bx - x, bz - z) > 2.3) && s.bl.every(b => b.s > 1 || Math.hypot(b.x - x, b.z - z) > 1.5)) break;
+    }
+    const g = !s.bl.some(b => b.g) && ffRnd(s) < C.goldP ? 1 : 0;
+    const b = { id: ++s.bid, s: 0, x: +x.toFixed(2), z: +z.toFixed(2), a: -delay }; if (g) b.g = 1;
+    s.bl.push(b);
+  },
+  // throw ball b from (x, z) along (ux, uz): d units, T s, arc h; it lands clamped inside the lawn
+  fly(s, b, x, z, ux, uz, d, T, h) {
+    let ex = x + ux * d, ez = z + uz * d; const r = Math.hypot(ex, ez), lim = s.R - .5; if (r > lim) { ex *= lim / r; ez *= lim / r; }
+    b.by = -1; Object.assign(b, { s: 3, x: +x.toFixed(2), z: +z.toFixed(2), vx: +((ex - x) / T).toFixed(3), vz: +((ez - z) / T).toFixed(3), T, h, a: 0 }); delete b.k;
+  },
+  pickUp(s, k, b) { b.s = 2; b.k = k; b.a = 0; s.cr[k] = b.id; },
+  bank(s, k, b, bi) {
+    const v = b.g ? FFETCH.goldV : 1;
+    s.bc[bi] += v; if (k >= 0) s.sc[k] += v;
+    s.fx.push({ id: ++s.fid, b: bi, k, v, t: +s.t.toFixed(2) }); if (s.fx.length > 6) s.fx.shift();
+    s.bl.splice(s.bl.indexOf(b), 1);
+  },
+  update(s, dt, I) {
+    const C = FFETCH;
+    if (!s.go) {
+      s.go = 1; s.bl = []; s.cr.fill(0); s.nx = 0;
+      for (let i = 0; i < (C.NB[s.n] || 5); i++) this.spawn(s, i * .12); /* the opening drop */
+    }
+    s.t += dt;
+    const ev = this.step(s, I, dt);
+    // a landed shove on a carrier knocks the ball out, a little away from the shover
+    ev.hits.forEach(([h, t]) => {
+      const b = this.ball(s, s.cr[t]); if (!b) return;
+      const p = s.pm[t], q = s.pm[h], a = Math.atan2(p.z - q.z, p.x - q.x) + gauss() * .45;
+      s.cr[t] = 0; this.fly(s, b, p.x, p.z, Math.cos(a), Math.sin(a), C.dropD, C.dropT, C.dropH);
+    });
+    // balls: falling -> on the lawn, flying -> lands (in a basket = scores), carried -> follows its pup
+    for (let i = s.bl.length - 1; i >= 0; i--) {
+      const b = s.bl[i]; b.a = +(b.a + dt).toFixed(4);
+      if (b.s === 0 && b.a >= C.fall) { b.s = 1; b.a = 0; }
+      else if (b.s === 3 && b.a >= b.T) {
+        const lx = +(b.x + b.vx * b.T).toFixed(2), lz = +(b.z + b.vz * b.T).toFixed(2), bi = s.bs.findIndex(([bx, bz]) => Math.hypot(bx - lx, bz - lz) < C.bIn);
+        if (bi >= 0) { this.bank(s, s.teams ? (b.by >= 0 && s.own[b.by] === bi ? b.by : -1) : bi, b, bi); continue; } /* FFA: the basket's owner; teams: the tosser if it is its side's */
+        Object.assign(b, { s: 1, x: lx, z: lz, a: 0 }); delete b.vx; delete b.vz; delete b.T; delete b.h; delete b.by;
+      } else if (b.s === 2) { const p = s.pm[b.k]; b.x = +p.x.toFixed(2); b.z = +p.z.toFixed(2); }
+    }
+    // pups: Action = toss (carrying) or grab within reach; walk-over pickup; carrier touching its basket = scores
+    s.pm.forEach((p, k) => {
+      const inp = I[k] || NOIN, ok = !p.st;
+      let b = this.ball(s, s.cr[k]);
+      if (b && inp.ap && ok && !p.lg) { s.cr[k] = 0; this.fly(s, b, p.x, p.z, Math.cos(p.f), Math.sin(p.f), C.tossD, C.tossT, C.tossH); b.by = k; return; }
+      if (!b && ok) {
+        let best = null, bd = 1e9;
+        for (const q of s.bl) { if (q.s !== 1) continue; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < bd) { bd = d; best = q; } }
+        if (best && (bd < C.autoR || inp.ap && bd < C.grabR)) { this.pickUp(s, k, best); b = best; }
+      }
+      if (b) { const [bx, bz] = s.bs[s.own[k]]; if (Math.hypot(p.x - bx, p.z - bz) < C.bR + PMV.r + .14) { s.cr[k] = 0; this.bank(s, k, b, s.own[k]); } }
+    });
+    // keep the field topped up (falling + lying balls), one spawn per gap
+    const field = s.bl.filter(b => b.s < 2).length;
+    if (field < (C.NB[s.n] || 5) && s.t >= s.nx && s.t < C.DUR - C.fall) { this.spawn(s); s.nx = +(s.t + C.gap).toFixed(2); }
+    if (s.t >= C.DUR) {
+      if (s.teams) {
+        const per = [0, 1].map(t => s.bc[t] / Math.max(1, s.teams.filter(x => x === t).length));
+        teamEnd(s, Math.abs(per[0] - per[1]) < 1e-6 ? -1 : per[0] > per[1] ? 0 : 1); s.place = rankScores(s.sc);
+      } else { s.rank = rankScores(s.bc); s.done = true; } /* FFA: basket i = pup i */
+    }
+  },
+  // ----- bots: carrying = head home (toss when the basket is about a toss away, per level); else shove a rival carrier
+  // nearby (per level) or go for the best ball: near me, near my basket, golden worth more, not one a rival is closer to
+  rival(s, k, j) { return j !== k && !s.pm[j].out && (!s.teams || s.teams[j] !== s.teams[k]); },
+  plan(s, k, L) {
+    const C = FFETCH, p = s.pm[k], b = s.bk[k], pl = s.ps[k], lv = this.lvl(pl), [hx, hz] = s.bs[s.own[k]];
+    if (s.cr[k]) {
+      const d = Math.hypot(hx - p.x, hz - p.z);
+      b.toss = d > C.tossD - .7 && d < C.tossD + .5 && Math.random() < C.tossP[lv] ? 1 : 0;
+      return { x: hx, z: hz };
+    }
+    b.toss = 0;
+    // a rival carrier close by: go shove it
+    let cj = -1, cd = 1e9;
+    s.pm.forEach((q, j) => { if (!this.rival(s, k, j) || !s.cr[j] || q.ns > 0 || q.st) return; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < cd) { cd = d; cj = j; } });
+    if (cj >= 0 && cd < C.shR && Math.random() < L.shv * C.shK[lv]) { const q = s.pm[cj]; return { x: q.x + q.vx * .2, z: q.z + q.vz * .2, sh: cj }; }
+    // the best ball (cost = my distance + part of the way home, over its value; a rival closer to it costs extra)
+    let best = null, bc = 1e9;
+    for (const q of s.bl) {
+      if (q.s === 2 || q.s === 0 && q.a < C.seeFall[lv]) continue;
+      const qx = q.s === 3 ? q.x + q.vx * q.T : q.x, qz = q.s === 3 ? q.z + q.vz * q.T : q.z, my = Math.hypot(qx - p.x, qz - p.z);
+      let rv = 1e9; s.pm.forEach((o, j) => { if (this.rival(s, k, j) && !s.cr[j] && !o.st) rv = Math.min(rv, Math.hypot(qx - o.x, qz - o.z)); });
+      // teammates heading for it already: leave it to them
+      let mate = 0; if (s.teams) s.pm.forEach((o, j) => { if (j !== k && s.teams[j] === s.teams[k] && !s.cr[j] && s.bk[j].tid === q.id && Math.hypot(qx - o.x, qz - o.z) < my) mate = 1; });
+      let c = (my + Math.hypot(qx - hx, qz - hz) * .35 + Math.max(0, my - rv) * 1.5 * C.cont[lv] + mate * 4) / Math.pow(q.g ? C.goldV : 1, .6);
+      if (q.id === b.tid) c -= .4; /* sticks to its choice a little */
+      if (c < bc) { bc = c; best = [qx, qz, q.id]; }
+    }
+    if (best) { b.tid = best[2]; return { x: best[0], z: best[1] }; }
+    b.tid = 0;
+    if (cj >= 0) { const q = s.pm[cj]; return { x: q.x, z: q.z, sh: cd < 2 ? cj : -1 }; }
+    return { x: hx * .4, z: hz * .4 };
+  },
+  bot(s, k, dt) {
+    const C = FFETCH, p = s.pm[k], b = s.bk[k];
+    const o = Object.assign({}, pmBot.call(this, s, k, dt, this.plan, { R: s.R, margin: .9 })), L = mvLv(s.ps[k]), sk = (1 - (1 - L.spd) * C.spdK[this.lvl(s.ps[k])]) / L.spd;
+    o.mx *= sk; o.my *= sk;
+    let a = false;
+    if (s.cr[k]) {
+      // toss: home about a toss away and roughly ahead
+      if (b.toss && !p.st && !p.lg) { const [hx, hz] = s.bs[s.own[k]], d = Math.hypot(hx - p.x, hz - p.z); if (Math.abs(d - C.tossD) < .45 && Math.abs(wrapA(Math.atan2(hz - p.z, hx - p.x) - p.f)) < .12) { a = true; b.toss = 0; } }
+    } else if (!p.st) {
+      for (const q of s.bl) if (q.s === 1) { const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < C.grabR - .1 && d > C.autoR) { a = true; break; } }
+    }
+    o.a = a && !b.la; b.la = a; /* a fresh press needs a release first */
+    if (o.b) o.a = false;
+    return o;
+  },
+  score(s, k) { const v = s.teams ? s.sc[k] : s.bc[k]; return `${v} ball${v === 1 ? '' : 's'}`; },
+  // ----- view: a striped park lawn ringed by hedges, a duck pond at the back, wicker baskets in each pup's colour
+  view(s) {
+    const C = FFETCH, R = s.R, v = mgBase('#c6ecff', '#8fcf6a', 170);
+    mgSky(v, '#86cfff', '#f2fbe6'); v.scene.fog.near = 34; v.scene.fog.far = 86;
+    mgStripes(v, '#8fcf6a', '#85c661', 60);
+    // the lawn: mown stripes + a soft edge, one canvas on a disc
+    const lt = texCanvas(512, (c, n) => {
+      for (let i = 0; i < 12; i++) { c.fillStyle = i % 2 ? '#6fb84f' : '#7cc45a'; c.fillRect(i * n / 12, 0, n / 12 + 1, n); }
+      c.strokeStyle = 'rgba(40,95,35,.28)'; c.lineWidth = 2; c.lineCap = 'round';
+      for (let i = 0; i < 160; i++) { const x = (i * 97.3) % n, y = (i * 53.9) % n; c.beginPath(); c.moveTo(x, y + 5); c.lineTo(x + 1.5, y); c.stroke(); }
+      const gr = c.createRadialGradient(n / 2, n / 2, n * .36, n / 2, n / 2, n * .5); gr.addColorStop(0, 'rgba(255,255,230,0)'); gr.addColorStop(1, 'rgba(40,100,40,.3)'); c.fillStyle = gr; c.fillRect(0, 0, n, n);
+    });
+    const lawn = new THREE.Mesh(new THREE.CircleGeometry(R + .2, 72).rotateX(-Math.PI / 2), texMat(lt, { color: '#ffffff', polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 })); lawn.position.y = .04; /* polygon offset: the minigame target's depth is coarse (the far rim hatched) */ lawn.receiveShadow = true; lawn.userData.noInk = true; v.scene.add(lawn);
+    const edge = new THREE.Mesh(new THREE.RingGeometry(R + .2, R + .7, 72).rotateX(-Math.PI / 2), Object.assign(mat('#f3e6c4').clone(), { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })); edge.position.y = .05; edge.receiveShadow = false; edge.userData.noInk = true; v.scene.add(edge);
+    // rim dressing (baked): a hedge ring (bushes), trees behind, a duck pond at the back left, flowers at the sides
+    const A = new THREE.Group(), nh = 30;
+    for (let i = 0; i < nh; i++) { const a = i / nh * TAU, r = R + 1.05; if (Math.sin(a) > .55) continue; /* open at the front: the camera side */ mgaBush(A, Math.cos(a) * r, Math.sin(a) * r, .62 + (i % 3) * .08, i); }
+    for (let i = 0; i < 9; i++) { const a = Math.PI * (1.12 + i / 8 * .76), r = R + 3.6 + (i % 2) * 1.4; mgaTree(A, Math.cos(a) * r, Math.sin(a) * r * .9 - .6, 1.05 + (i % 3) * .14, i + 1); }
+    for (const sx of [-1, 1]) for (let i = 0; i < 2; i++) mgaTree(A, sx * (R + 3.4 + i * 1.3), 1 + i * 2.6, .95 + i * .1, i + (sx > 0 ? 4 : 2));
+    for (let i = 0; i < 10; i++) { const sx = i % 2 ? 1 : -1, j = Math.floor(i / 2); mgaFlower(A, sx * (R + 1.9 + (j % 2) * .5), R * .2 + j * .9, 1.1, i); }
+    const px = -(R * .55), pz = -(R + 3.3);
+    const pond = new THREE.Mesh(new THREE.CircleGeometry(2.1, 40).rotateX(-Math.PI / 2), Object.assign(mat('#7fd0f0').clone(), { polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 })); pond.scale.set(1.5, 1, .8); pond.position.set(px, .1, pz); pond.userData.noInk = true; pond.receiveShadow = pond.castShadow = false; v.scene.add(pond); /* not baked: keeps its polygon offset */
+    const bank = new THREE.Mesh(new THREE.RingGeometry(2.1, 2.45, 40).rotateX(-Math.PI / 2), Object.assign(mat('#d9c99a').clone(), { polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 })); bank.scale.set(1.5, 1, .8); bank.position.set(px, .08, pz); bank.userData.noInk = true; bank.receiveShadow = bank.castShadow = false; v.scene.add(bank);
+    for (let i = 0; i < 4; i++) { const lp = M(GEO.disc, '#6cc35a', px - 1.6 + i * 1.1, .14, pz + (i % 2 ? .4 : -.3), v.scene, .32, .03, .32); lp.castShadow = false; }
+    // a little duck on the pond + a bench beside it
+    M(GEO.sph, '#ffe27a', px + .9, .25, pz - .1, A, .26, .22, .22); M(GEO.sph, '#ffe27a', px + 1.12, .45, pz - .1, A, .14); M(GEO.cone, '#ff9a3c', px + 1.3, .44, pz - .1, A, .05, .12, .05).rotation.z = -Math.PI / 2;
+    mgaAt(A, 'Fetch_bench', R * .5, 0, -(R + 2.4), 1, 0);
+    mgaBake(v, A);
+    // baskets: wicker tub in the owner's colour (team colour in team rounds), cream rim, dark inside, handle, pennant;
+    // a small pile of balls shows inside as the count grows; group scale pops on a score
+    const wick = texCanvas(128, (c, n) => {
+      c.fillStyle = '#ffffff'; c.fillRect(0, 0, n, n);
+      c.strokeStyle = 'rgba(0,0,0,.16)'; c.lineWidth = 3;
+      for (let y = 0; y < n; y += 16) for (let x = 0; x < n; x += 16) { const o = (y / 16) % 2 ? 8 : 0; c.beginPath(); c.ellipse(x + o, y + 8, 7, 5, 0, 0, TAU); c.stroke(); }
+    });
+    wick.wrapS = wick.wrapT = THREE.RepeatWrapping; wick.repeat.set(4, 1);
+    const bcol = i => s.teams ? (s.tcol ? s.tcol[i] : ['#ffb627', '#6c7bd9'][i]) : s.ps[i].col;
+    v.bsk = s.bs.map(([x, z], i) => {
+      const gp = new THREE.Group(); gp.position.set(x, 0, z); gp.rotation.y = -Math.atan2(z, x) + Math.PI / 2; v.scene.add(gp);
+      const sc = s.teams ? 1.25 : 1; gp.scale.setScalar(sc);
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(C.bR, C.bR * .82, .62, 28, 1, true), texMat(wick, { color: bcol(i), side: THREE.DoubleSide })); body.position.y = .31; body.castShadow = true; gp.add(body);
+      M(GEO.disc, '#5a3f2a', 0, .1, 0, gp, C.bR * .84, .04, C.bR * .84).castShadow = false;
+      const rim = M(GEO.torus, bcol(i), 0, .62, 0, gp, C.bR * .98, C.bR * .98, .55); rim.rotation.x = Math.PI / 2;
+      const hd = new THREE.Mesh(new THREE.TorusGeometry(C.bR * .9, .045, 6, 20, Math.PI), mat('#c99a5e')); hd.position.y = .62; gp.add(hd);
+      M(GEO.cyl, '#8a6a9a', C.bR * .95, .9, 0, gp, .035, 1.2, .035);
+      const fl = M(GEO.prism, bcol(i), C.bR * .95 + .24, 1.33, 0, gp, .26, .03, .26); fl.rotation.x = Math.PI / 2; fl.rotation.z = Math.PI / 2;
+      return { gp, sc, pop: -9 };
+    });
+    // balls: instanced tennis balls (texture with the white seam) + golden ones, ink shells, ground shadows,
+    // drop rings for falling balls (pooled)
+    const tt = texCanvas(128, (c, n) => {
+      c.fillStyle = '#d8ef4c'; c.fillRect(0, 0, n, n);
+      c.strokeStyle = '#fbfff0'; c.lineWidth = 7; c.beginPath();
+      for (let x = 0; x <= n; x += 2) { const y = n / 2 + Math.sin(x / n * TAU * 2) * n * .2; if (x) c.lineTo(x, y); else c.moveTo(x, y); }
+      c.stroke();
+    });
+    const NB = 40, gS = new THREE.SphereGeometry(1, 16, 12);
+    const mk = (geo, m, nn = NB) => { const im = new THREE.InstancedMesh(geo, m, nn); im.userData.noInk = true; im.castShadow = false; im.frustumCulled = false; im.count = 0; v.scene.add(im); return im; };
+    v.ball = mk(gS, texMat(tt, { color: '#ffffff' })); v.ball.castShadow = true;
+    v.gold = mk(gS, new THREE.MeshToonMaterial({ color: '#ffd23f', gradientMap: GRAD, emissive: new THREE.Color('#3a2600') }), 8); v.gold.castShadow = true;
+    v.ink = mk(gS, new THREE.MeshBasicMaterial({ color: INK, side: THREE.BackSide }), NB + 8);
+    v.shd = mk(new THREE.CircleGeometry(1, 18).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#3d6a3a', transparent: true, opacity: .28, depthWrite: false }), NB + 8); v.shd.renderOrder = 1;
+    const gR = new THREE.RingGeometry(.8, 1, 36).rotateX(-Math.PI / 2);
+    v.rings = Array.from({ length: 12 }, () => { const r = new THREE.Mesh(gR, new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false })); r.userData.noInk = true; r.renderOrder = 2; r.visible = false; r.position.y = .04; v.scene.add(r); return r; });
+    v.mx = new THREE.Matrix4(); v.q = new THREE.Quaternion(); v.p3 = new THREE.Vector3(); v.s3 = new THREE.Vector3(); v.e = new THREE.Euler();
+    v.fxSeen = s.fx.length ? s.fx[s.fx.length - 1].id : 0; /* a guest joining mid-game doesn't replay old pops */
+    addPups(v, s.ps);
+    const kc = (R + 2.6) / 8.6;
+    v.cam.position.set(0, 15.2 * kc, 12.4 * kc); v.cam.lookAt(0, 0, -.4);
+    return pmView(v);
+  },
+  sync(s, v) {
+    const C = FFETCH, br = C.ballR * 1.25;
+    if (!v.dust) mgDust(v, '#f4ffe6', 60); dustTick(v);
+    // guests get 15 snapshots a second: falling / flying balls move on from the last one by the view clock
+    if (s.t !== v.st0) { v.st0 = s.t; v.stN = NOW; }
+    const ext = MS && MS.phase === 'play' ? Math.min(.1, NOW - (v.stN || NOW)) : 0;
+    let n = 0, ng = 0, ni = 0, nr = 0;
+    const put = (x, y, z, r, gold, rot = 0) => {
+      if (gold ? ng >= 8 : n >= 40) return;
+      v.e.set(rot, rot * .7, 0); v.q.setFromEuler(v.e);
+      v.mx.compose(v.p3.set(x, y, z), v.q, v.s3.set(r, r, r)); (gold ? v.gold : v.ball).setMatrixAt(gold ? ng++ : n++, v.mx);
+      v.mx.compose(v.p3, v.q, v.s3.set(r * 1.16, r * 1.16, r * 1.16)); v.ink.setMatrixAt(ni, v.mx);
+      const k2 = clamp(1.1 - y * .12, .3, 1); v.mx.compose(v.p3.set(x, .035, z), v.q.identity(), v.s3.set(r * 1.2 * k2, 1, r * 1.2 * k2)); v.shd.setMatrixAt(ni, v.mx); ni++;
+    };
+    for (const b of s.bl) {
+      const a = b.a + (b.s === 2 ? 0 : ext);
+      if (b.s === 0) {
+        if (a < 0) continue;
+        const u = clamp(a / C.fall, 0, 1), rg = v.rings[nr++];
+        if (rg) { rg.visible = true; rg.position.x = b.x; rg.position.z = b.z; const rs = lerp(1.1, .45, u); rg.scale.set(rs, 1, rs); rg.material.opacity = .35 + .45 * u; rg.material.color.set(b.g ? '#ffd23f' : '#ffffff'); }
+        put(b.x, br + (1 - u * u) * C.dropY, b.z, br, b.g, a * 6);
+      } else if (b.s === 1) {
+        const bo = a < .5 ? Math.abs(Math.sin(a / .5 * Math.PI * 2)) * (1 - a / .5) * .45 : 0; /* a little bounce on landing */
+        put(b.x, br + bo, b.z, br, b.g, b.id);
+      } else if (b.s === 3) {
+        const f = Math.min(a, b.T), u = f / b.T; put(b.x + b.vx * f, br + b.h * 4 * u * (1 - u), b.z + b.vz * f, br, b.g, a * 14);
+      } else if (b.s === 2) {
+        const p = s.pm[b.k], o = v.pups[b.k], sc = o ? o.scale.y : 1; if (!p) continue;
+        put(p.x, C.heldY * sc + p.y + Math.sin(NOW * 9 + b.k) * .04, p.z, br * 1.1, b.g, 0);
+      }
+    }
+    // basket piles: up to 5 balls inside, a few showing over the rim as the count grows; pop on a score
+    s.bs.forEach(([x, z], i) => {
+      const m = Math.min(5, s.bc[i]), o = v.bsk[i];
+      for (let j = 0; j < m; j++) { const a = j * 2.4 + i, r = j ? .28 : 0; put(x + Math.cos(a) * r * o.sc, (.42 + Math.min(j, 3) * .06) * o.sc, z + Math.sin(a) * r * o.sc, br * o.sc, false, j); }
+      const u = (NOW - o.pop) / .4, e = u >= 0 && u < 1 ? Math.sin(u * Math.PI) * (1 - u) : 0;
+      o.gp.scale.set(o.sc * (1 + e * .25), o.sc * (1 - e * .2), o.sc * (1 + e * .25));
+    });
+    for (let i = nr; i < v.rings.length; i++) v.rings[i].visible = false;
+    v.ball.count = n; v.gold.count = ng; v.ink.count = v.shd.count = ni;
+    for (const m of [v.ball, v.gold, v.ink, v.shd]) m.instanceMatrix.needsUpdate = true;
+    // scores (once each): basket pop, a puff of dust, a pop sound; the scorer cheers
+    for (const e of s.fx) {
+      if (e.id <= v.fxSeen) continue; v.fxSeen = e.id;
+      const o = v.bsk[e.b]; if (o) { o.pop = NOW; const [x, z] = s.bs[e.b]; dustPuff(v, x, .8, z, e.v > 1 ? 14 : 8, 1.6, 1.1); }
+      if (SFX.pop) sfx('pop'); if (e.k >= 0) mgRe(v, e.k, 'happy');
+    }
+    // pups: carriers hold the ball up over the head with both paws; the rest look at the nearest ball
+    s.pm.forEach((p, k) => {
+      const o = v.pups[k], c = s.cr[k];
+      let act = {};
+      if (p.lg > 0 || p.st > 0) act = {};
+      else if (c) act = { aX: [-2.85, -2.85], aZ: [.4, .4], mouth: .4, eyes: 'o' };
+      else if (o) { let nb = null, nd = 9; for (const b of s.bl) if (b.s === 1 || b.s === 0 && b.a > 0) { const d = Math.hypot(b.x - p.x, b.z - p.z); if (d < nd) { nd = d; nb = b; } } if (nb) { const lk = lookAct(o, nb.x, .3, nb.z); act = { hX: lk.hX, hY: lk.hY, ears: .3 }; } }
+      pmPose(s, v, k, 0, Object.assign({ act }, reOpt(v, k)));
+    });
+    pmFx(s, v);
+  },
+  hud(s, v) {
+    const C = FFETCH;
+    s.pm.forEach((p, k) => { const [x, y] = toScreen(p.x, 2.95 + p.y, p.z, v.cam); tag(s.ps[k], x, y); });
+    pmHud(s, v, 2.6);
+    // a score chip on every basket (owner / team colour), "+1" / "+3" pops rising from it
+    s.bs.forEach(([x, z], i) => {
+      const r = Math.hypot(x, z) || 1, [sx, sy] = toScreen(x + x / r * .8, .2, z + z / r * .8, v.cam), col = s.teams ? (s.tcol ? s.tcol[i] : '#888') : s.ps[i].col;
+      ell(sx, sy, 19, 19, col, INK, 3); T(String(s.bc[i]), sx, sy + 1, 20, '#fff', 'center', { lw: 4 });
+    });
+    for (const e of s.fx) {
+      const a = s.t - e.t; if (a < 0 || a > 1) continue;
+      const [x, z] = s.bs[e.b], [sx, sy] = toScreen(x, 2.2, z, v.cam), sc = .6 + easeBack(clamp(a / .15, 0, 1)) * .5;
+      g.save(); g.translate(sx, sy - 26 - a * 36); g.scale(sc, sc); g.globalAlpha = clamp((1 - a) / .3, 0, 1);
+      T(`+${e.v}`, 0, 0, e.v > 1 ? 34 : 28, e.v > 1 ? '#ffd23f' : '#fff', 'center', { lw: 6 }); g.restore();
+    }
+    if (s.t != null && MS && MS.phase !== 'intro') T(`⏱ ${Math.max(0, C.DUR - s.t).toFixed(0)} s`, W / 2, 30, 26, '#fff', 'center', { lw: 5 });
+    // top chips: each pup (FFA) or each side (teams) with its score, in its colour
+    if (s.teams) {
+      const tn = MS && MS.opts && MS.opts.tname, cw = 230, x0 = W / 2 - cw / 2 - 10;
+      [0, 1].forEach(t => {
+        const x = x0 + t * (cw + 20), y = 70, col = s.tcol ? s.tcol[t] : '#888';
+        rr(x - cw / 2, y - 17, cw, 34, 16); g.fillStyle = col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+        T(`${(tn && tn[t]) || (t ? 'Team 2' : 'Team 1')} · ${s.bc[t]}`, x, y + 1, 16, '#fff', 'center', { lw: 3 });
+      });
+    } else {
+      const cw = 110, x0 = W / 2 - s.n * cw / 2 + cw / 2;
+      s.ps.forEach((pl, k) => {
+        const x = x0 + k * cw, y = 70;
+        rr(x - 52, y - 16, 104, 32, 15); g.fillStyle = pl.col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+        T(pl.name.slice(0, 7), x - 14, y + 1, 13, '#fff', 'center', { lw: 3 }); T(String(s.bc[k]), x + 33, y + 1, 18, '#fff', 'center', { lw: 4 });
+      });
+    }
+    if (s.t != null && C.DUR - s.t < 5 && s.t < C.DUR) T('Last few seconds!', W / 2, 112, 22, '#ff5c8a', 'center', { lw: 5 });
+  },
+};
+MGCARD.ffetch = { ic: 'ball', btn: 'move', ctl: 'move', goal: 'Fetch the most balls into your basket.', press: 'Run over a ball to grab it, then carry it into your basket. Action = grab or toss.', push: 'Shove a carrier and the ball drops!', score: 'One ball at a time. Golden ball = 3. Most balls when time runs out wins.', tip: 'Grab a ball · Carry it home!' };
 
 /* ===== Screens (DOM) ===== */
 function setScreen(name) {
