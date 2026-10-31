@@ -10086,21 +10086,19 @@ MGDEF.curl = {
     wall(cx, -Wz - .2, Lx + .4, .2, bh); wall(cx, Wz + .2, Lx + .4, .2, nh); wall(x0 - .1, 0, .2, Lz + .2, bh); wall(x1 + .1, 0, .2, Lz + .2, bh);
     const PAN = ['#ff8fb1', '#ffd23f', '#7fd0ff', '#b9a0ff', '#9be37a', '#ff9f5c'];
     for (let i = 0; i < 10; i++) { const x = x0 + 1.4 + i * (Lx - 2.8) / 9; M(GEO.box, PAN[i % PAN.length], x, bh * .5, -Wz - .08, A, 1.6, bh * .62, .04); }
-    // bleachers + crowd behind the far board
-    const bz = -Wz - 2.4;
+    // bleachers + crowd at the two ENDS of the rink, facing it (fix round 2026-10-31: on the far side they sat right
+    // behind the top HUD band in every camera); the far side keeps only low snow banks, so the HUD reads on plain snow
+    const sw = Math.min(9, 2 * Wz + .4), stZ = .7;
     v.crowd = [];
-    for (const [x, w] of [[-9.5, 9], [.5, 9]]) v.crowd.push(MGA.lib ? mgaStand(v, x, bz, w) : bleachers(v.scene, x, bz, w));
-    // snow banks, pines, snowmen at the ends; bunting poles along the far side
-    for (let i = 0; i < 14; i++) { const x = x0 - 1.5 - (i % 2) * .9, z = -Wz - 1 + i * (2 * Wz + 2) / 13; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .9 + hash01(i) * .4, .5, .8); }
-    for (let i = 0; i < 9; i++) { const x = x1 + 2.6 + (i % 2) * 1.2, z = -Wz + i * (2 * Wz) / 8; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .8 + hash01(i + 5) * .4, .45, .8); }
+    for (const [x, ry] of [[x0 - 1.5, Math.PI / 2], [x1 + 2, -Math.PI / 2]]) { const g = MGA.lib ? mgaStand(v, x, stZ, sw) : bleachers(v.scene, x, stZ, sw); g.rotation.y = ry; v.crowd.push(g); }
+    // snow banks, pines, snowmen behind the stands; low banks along the far side
+    for (let i = 0; i < 14; i++) { const x = x0 - 5.2 - (i % 2) * .9, z = -Wz - 1 + i * (2 * Wz + 2) / 13; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .9 + hash01(i) * .4, .5, .8); }
+    for (let i = 0; i < 9; i++) { const x = x1 + 5.4 + (i % 2) * 1.2, z = -Wz + i * (2 * Wz) / 8; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .8 + hash01(i + 5) * .4, .45, .8); }
+    for (let i = 0; i < 16; i++) { const x = x0 + .6 + i * (Lx - 1.2) / 15; M(GEO_LO.mid, '#f3f8fd', x, -.12, -Wz - 2.1 - (i % 2) * .5, A, 1.1 + hash01(i + 11) * .5, .32, .7); }
     const rnd = (() => { let q = 91; return () => (q = (q * 16807) % 2147483647) / 2147483647; })();
-    for (let i = 0; i < 5; i++) boardTree(A, x0 - 3.2 - (i % 2) * 1.6, -Wz - 1.5 + i * 2.1, 1 + (i % 3) * .15, 'pine', rnd);
-    for (let i = 0; i < 4; i++) boardTree(A, x1 + 4.6 + (i % 2) * 1.4, -Wz - 1 + i * 2.2, 1 + (i % 3) * .15, 'pine', rnd);
-    for (let i = 0; i < 8; i++) boardTree(A, -16 + i * 4.6 + (i % 2) * 1.3, bz - 4.2 - (i % 3) * .8, 1.15 + (i % 3) * .2, 'pine', rnd);
-    snowMan(A, x0 - 1.7, Wz + .6, .5, 0, 1); snowMan(A, x1 + 2, Wz + .9, -.5, 1, 1); snowMan(A, -4.5, bz - .4, 0, 2, .9);
-    const poles = [-15.5, -10.5, -5, .5, 5.5, 9.8];
-    for (const x of poles) { M(GEO.cyl, '#8a5a3a', x, 2, bz - 1.4, A, .08, 4, .08); M(GEO.sph, '#ffd23f', x, 4.05, bz - 1.4, A, .14); }
-    for (let i = 0; i < poles.length - 1; i++) bunting(A, [poles[i], 3.9, bz - 1.4], [poles[i + 1], 3.9, bz - 1.4], 10, .5);
+    for (let i = 0; i < 5; i++) boardTree(A, x0 - 7 - (i % 2) * 1.6, -Wz - 1.5 + i * 2.1, 1 + (i % 3) * .15, 'pine', rnd);
+    for (let i = 0; i < 4; i++) boardTree(A, x1 + 7.2 + (i % 2) * 1.4, -Wz - 1 + i * 2.2, 1 + (i % 3) * .15, 'pine', rnd);
+    snowMan(A, x0 - 1.4, Wz + 1.9, .5, 0, 1); snowMan(A, x1 + 1.4, Wz + 1.9, -.5, 1, 1);
     frostGroup(A, .5, .05);
     mgaBake(v, A);
     // sliding streaks (instanced flat strokes on the ice) + ice spray puffs
@@ -10277,7 +10275,7 @@ const GIANT = {
   gSpd: 3.5,      // GUESS giant top speed (pack 5.2)
   gAcc: 16,       // GUESS giant acceleration
   gTurn: 3.2,     // GUESS giant turn rate (rad/s): slow enough that the pack can get behind it (5.5: back bites were ~15 %)
-  GH: [0, 20, 32, 45, 56, 70], // GUESS giant HP by pack size (index = pack pups, 1..5); tuned on bot runs: giant ~40-50 % at 2-5 normal pups
+  GH: [0, 20, 29, 46, 60, 73], // GUESS giant HP by pack size (index = pack pups, 1..5); tuned on bot runs: giant ~40-50 % at 2-5 normal pups (fix round 2026-10-31: was 32 / 45 / 56 / 70 before the north-charge limit)
   HP: 3,          // GUESS pack pup hits to go out (spec)
   bite: .55,      // GUESS bite cooldown
   reach: .65,     // GUESS bite reach past touching (centre distance < gR + .6 + reach)
@@ -10313,6 +10311,10 @@ const GIANT = {
   gSl: { easy: .45, normal: .75, hard: .95, casual: .7 },       // GUESS chance per decision to slam when 2+ pups are in range
   gCh: { easy: .25, normal: .5, hard: .7, casual: .45 },        // GUESS chance per decision to charge a lone pup in range
   gAim: { easy: .35, normal: .2, hard: .08, casual: .22 },      // GUESS charge aim error (rad, sd)
+  gPull: .5,      // GUESS giant bot walks at its nearest pups' middle x this (pull to the arena centre; was .8: fights hugged the fence)
+  gEdge: 3.5,     // GUESS the giant bot steers back to the middle from this far inside the fence (was 1)
+  chN: .4,        // GUESS the giant bot skips a charge whose dash would end north of -chN x R (charges carried it to the far fence: small on screen, under the HUD; 100 games, 4 pups: north third 22 % -> 6.5 %, wins unchanged; a fence-only limit cut giant wins to 13-25 %)
+  camIn: .74,     // GUESS closest follow-camera zoom (x the whole-arena distance)
 };
 const gLv = pl => pl && pl.ai === 'casual' ? 'casual' : ['easy', 'normal', 'hard'][cpuLvl(pl)];
 MGDEF.giant = {
@@ -10498,13 +10500,13 @@ MGDEF.giant = {
     if (!al.length) return {};
     al.sort((a, c) => Math.hypot(s.pm[a].x - G.x, s.pm[a].z - G.z) - Math.hypot(s.pm[c].x - G.x, s.pm[c].z - G.z));
     const near = al.slice(0, 2), x = near.reduce((a, j) => a + s.pm[j].x, 0) / near.length, z = near.reduce((a, j) => a + s.pm[j].z, 0) / near.length;
-    return { x: x * .8, z: z * .8 }; /* a pull to the middle: fights stay in view and away from the fence */
+    return { x: x * C.gPull, z: z * C.gPull }; /* a pull to the middle: fights stay in view and away from the fence */
   },
   bot(s, k, dt) {
     const C = GIANT, p = s.pm[k], b = s.bk[k], pl = s.ps[k], L = mvLv(pl), lv = gLv(pl), sk = (1 - (1 - L.spd) * C.spdK) / L.spd;
     if (p.out) return AX0;
     if (k === s.gk) {
-      const o = Object.assign({}, pmBot.call(this, s, k, dt, this.giantPlan, { R: s.R, margin: C.gR + 1, phase: s.no })); o.mx *= sk; o.my *= sk; o.a = o.b = false;
+      const o = Object.assign({}, pmBot.call(this, s, k, dt, this.giantPlan, { R: s.R, margin: C.gR + C.gEdge, phase: s.no })); o.mx *= sk; o.my *= sk; o.a = o.b = false;
       // charge crouch: keep the stick on the target (aim error per charge)
       if (s.ga === 2 && b.ct >= 0 && !s.pm[b.ct].out) { const q = s.pm[b.ct], a = Math.atan2(q.z - p.z, q.x - p.x) + (b.ce || 0); o.mx = Math.cos(a); o.my = Math.sin(a); return o; }
       if (s.ga !== 0) return o;
@@ -10514,7 +10516,9 @@ MGDEF.giant = {
       const inR = al.filter(j => dist(j) < C.slamR * .82 && s.pm[j].y < .2 && s.iv[j] < .6);
       if (!s.gs && (inR.length >= 2 || (inR.length && (al.length === 1 || inR.some(j => dist(j) < C.gR + 1.6)))) && Math.random() < C.gSl[lv]) { o.a = true; return o; }
       if (!s.gc) {
-        const lone = al.filter(j => dist(j) > 2.6 && dist(j) < C.chV * C.chT + .5 && s.iv[j] < .4 && al.every(i => i === j || Math.hypot(s.pm[i].x - s.pm[j].x, s.pm[i].z - s.pm[j].z) > 2.2));
+        let lone = al.filter(j => dist(j) > 2.6 && dist(j) < C.chV * C.chT + .5 && s.iv[j] < .4 && al.every(i => i === j || Math.hypot(s.pm[i].x - s.pm[j].x, s.pm[i].z - s.pm[j].z) > 2.2));
+        const L2 = C.chV * C.chT, inner = j => { const q = s.pm[j], ez = q.z - p.z, e = Math.hypot(q.x - p.x, ez) || 1; return p.z + ez / e * L2 > -s.R * C.chN; }; /* no charges that end on the far (north) side */
+        lone = lone.filter(inner);
         if (lone.length && Math.random() < C.gCh[lv]) { const j = lone[0], q = s.pm[j]; b.ct = j; b.ce = gauss() * C.gAim[lv]; const a = Math.atan2(q.z + q.vz * .4 - p.z, q.x + q.vx * .4 - p.x) + b.ce; o.mx = Math.cos(a); o.my = Math.sin(a); o.b = true; return o; }
       }
       return o;
@@ -10608,7 +10612,35 @@ MGDEF.giant = {
     v.fxSeen = s.fx.length ? s.fx[s.fx.length - 1].id : 0; /* a guest joining mid-game doesn't replay old puffs */
     const kc = (R + 2.6) / 8.6;
     v.cam.position.set(0, 15.6 * kc, 12.8 * kc); v.cam.lookAt(0, 0, -.4);
+    v.cOf = new THREE.Vector3(0, 15.6 * kc, 13.2 * kc); v.cT = new THREE.Vector3(0, 0, -.4); v.cF = 1; v.cTw = new THREE.Vector3(); v.cP = new THREE.Vector3();
     return pmView(v);
+  },
+  // fix round 2026-10-31: the camera follows the fight. Target = between the giant and the live pack (max .35 R off
+  // the middle), zoomed in up to GIANT.camIn; it zooms out (fast) only as far as needed to keep the giant and every
+  // live pack pup inside the frame below the HUD band; nothing fits = the old whole-arena view. Same on every screen.
+  camFit(s, v, tx, tz, f) {
+    const C = GIANT, c = v.cam; c.position.set(tx + v.cOf.x * f, v.cOf.y * f, tz - .4 + v.cOf.z * f); c.lookAt(tx, 0, tz - .4); c.updateMatrixWorld();
+    const ok = (x, y, z, top) => { const [sx, sy] = toScreen(x, y, z, c); return sx > 70 && sx < W - 70 && sy > top && sy < H - 30; };
+    const G = s.pm[s.gk];
+    if (!ok(G.x, 0, G.z, 130) || !ok(G.x, 2.3 * C.sc, G.z, 125)) return false;
+    return s.pm.every((p, k) => k === s.gk || p.out || (ok(p.x, 0, p.z, 130) && ok(p.x, 2.6, p.z, 115)));
+  },
+  camFollow(s, v) {
+    const C = GIANT, G = s.pm[s.gk], live = MS && MS.phase === 'play';
+    let tx = 0, tz = 0, f = 1;
+    if (live && !s.done) {
+      const al = s.pm.filter((p, k) => k !== s.gk && !p.out), n = al.length;
+      const px = n ? al.reduce((a, p) => a + p.x, 0) / n : G.x, pz = n ? al.reduce((a, p) => a + p.z, 0) / n : G.z;
+      tx = G.x * .6 + px * .4; tz = G.z * .6 + pz * .4;
+      const d = Math.hypot(tx, tz), lim = s.R * .35; if (d > lim) { tx *= lim / d; tz *= lim / d; }
+      f = 0;
+      for (const q of [C.camIn, .8, .86, .92, 1]) if (q >= C.camIn && this.camFit(s, v, tx, tz, q)) { f = q; break; }
+      if (!f) { f = 1; for (const w of [.66, .33, 0]) { if (this.camFit(s, v, tx * w, tz * w, 1) || !w) { tx *= w; tz *= w; break; } } }
+    }
+    const dt = clamp(NOW - (v.cN || NOW), 0, .1); v.cN = NOW;
+    v.cTw.set(tx, 0, tz - .4); v.cT.lerp(v.cTw, Math.min(1, dt * 2.2));
+    v.cF += (f - v.cF) * Math.min(1, dt * (f > v.cF ? 6 : 1.4));
+    v.cam0.set(v.cT.x + v.cOf.x * v.cF, v.cOf.y * v.cF, v.cT.z + v.cOf.z * v.cF);
   },
   sync(s, v) {
     const C = GIANT, G = s.pm[s.gk];
@@ -10673,7 +10705,9 @@ MGDEF.giant = {
       const m = mgMem(v, k); if (m.wasAir && !air && !p.out) dustPuff(v, p.x, .05, p.z, 3, .8, .8); m.wasAir = air;
     });
     v.stands.forEach((b, i) => crowdBob(b, .12, s.ga === 1 || s.ga === 3 ? 1.6 : 1));
+    if (v.cOf) this.camFollow(s, v);
     pmFx(s, v);
+    if (v.cOf) v.cam.lookAt(v.cT);
     // slam shake (on top of pmFx's camera; off with reduced motion)
     const u = v.shk == null ? 9 : (NOW - v.shk) / .45;
     if (u < 1 && !RMO) { const a = v.shA * (1 - u) * (1 - u); v.cam.position.x += Math.sin(u * 47) * a; v.cam.position.y += Math.sin(u * 61 + 1) * a * .8; }
