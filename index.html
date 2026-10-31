@@ -9784,6 +9784,469 @@ MGDEF.ffetch = {
   },
 };
 MGCARD.ffetch = { ic: 'ball', btn: 'move', ctl: 'move', goal: 'Fetch the most balls into your basket.', press: 'Run over a ball to grab it, then carry it into your basket. Action = grab or toss.', push: 'Shove a carrier and the ball drops!', score: 'One ball at a time. Golden ball = 3. Most balls when time runs out wins.', tip: 'Grab a ball · Carry it home!' };
+/* --- A10. Ice Rink Curling (new, FFA / teams, 2026-10-31): CURL.ENDS ends on a long ice rink (runs along +x, left to
+   right on screen). Each end every pup starts behind the start line in its own lane; the run-up zone (move freely,
+   B = shove) ends at the release line. Action = belly-slide launch (speed = run speed, x CURL.perfK when pressed in
+   the gold zone just before the line); crossing the line launches you anyway, and CURL.tAuto s into the end every
+   pup still standing is launched at whatever speed it has. Sliding: low friction, stick forward = sweep (slides
+   further), back = brake, sideways = slight steering; no shoves. Pups collide elastically, so a slider knocks the
+   ones lying still (the "stones") off the target. Off the back / sides = out for that end. When nothing moves the
+   end is scored by ring (button 4 / 3 / 2 / 1, + CURL.close for the single closest pup), a short scoring beat
+   (camera on the house, rings light, points pop), then everyone resets. Most points after all ends wins (ties share,
+   rankScores). Team rounds: the better team total PER PUP wins (teamEnd; s.place = per-pup points).
+   State (plain JSON): s.pm movers; s.ph[k] 0 run-up, 1 sliding, 2 lying still, 3 out; s.end (0-based), s.ep end
+   phase (0 play, 1 settle, 2 scoring beat, 3 get-ready), s.et seconds in it; s.sc totals, s.pts / s.rg this end's
+   points / ring (-1 none), s.cl closest pup; s.lp / s.lt launch (perfect push, end time), s.oa out time; s.fx last
+   knocks { id, x, z, t, v }. Lanes: s.Wz rink half width, s.lw lane spacing. --- */
+const CURL = {
+  ENDS: 3,          // GUESS ends per game
+  xMin: -14.6,      // GUESS rink start board (x)
+  xS: -12.6,        // GUESS start line (pups spawn .8 behind it)
+  xR: -6,           // GUESS release line: the run-up ends here
+  xH: 5.3,          // GUESS house centre (full run speed from the line, no press, no brake: stops at xH + 2.2 = the outer ring's edge, 1 pt; was 5 = just past it, 0)
+  xB: 8.9,          // GUESS back board (touching it = out)
+  W0: 2.6, Wn: .45, // GUESS rink half width = W0 + Wn x pups (2: 3.5, 4: 4.4, 6: 5.3)
+  rings: [.5, 1.1, 1.75, 2.4], // GUESS button / inner / middle / outer ring radius (pup centre inside = that ring)
+  pts: [4, 3, 2, 1],           // points per ring (spec)
+  close: 1,         // GUESS bonus for the single closest pup inside the rings
+  perfZ: 1.6,       // GUESS gold "perfect push" zone before the release line
+  perfK: 1.1,       // GUESS launch speed x for a press in that zone
+  fr: 1,            // GUESS slide friction (u/s^2): 5.2 u/s slides 13.5
+  sweep: .8,        // GUESS friction x while the stick points forward
+  brake: 1.35,      // GUESS friction x while the stick points back
+  steer: 1.1,       // GUESS sideways steering (u/s^2) while sliding
+  aMax: .38,        // GUESS max launch angle off straight (rad)
+  e: .85,           // GUESS pup-pup bounce (1 = perfectly elastic)
+  r: .75,           // GUESS a lying / sliding pup's collision radius (the run-up uses PMV.r .6; a belly-down pup is longer)
+  bodyF: 1.05,      // view: the belly-down body sits this far ahead of the pup's feet (the model is moved back, its ring forward)
+  bodyFd: .1,       // view: the same for Schiffy's GLB (her spine bends less: her body stays near her feet)
+  tAuto: 5,         // GUESS end seconds: everyone still in the run-up is launched
+  cap: 13,          // GUESS end seconds: everything still sliding stops
+  settle: .6,       // GUESS pause once all are still, before the scoring beat
+  beat: 2.8,        // GUESS scoring beat
+  ready: 1.1,       // GUESS "End 2" card before the next end (frozen)
+  knockD: 3.2,      // GUESS bots aiming at a stone plan to stop this far past it (so they hit it with speed)
+  spdK: { easy: .5, normal: .5, hard: .5, casual: .5 },     // GUESS bots keep this share of their level's MVLV.spd gap (like Paint)
+  dErr: { easy: 2.2, normal: 1.25, hard: .5, casual: 1.15 }, // GUESS sd of a bot's planned stop distance (units)
+  fix: { easy: .2, normal: .5, hard: .9, casual: .65 },      // GUESS chance per reaction a sliding bot brakes / sweeps / steers right (casual .65: a human watches their own slide; .55 gave casual 44 % vs normal)
+  knock: { easy: .1, normal: .3, hard: .65, casual: .3 },    // GUESS chance a bot waits for a rival's stone to knock it off
+  waitT: { easy: 1.8, normal: 2.2, hard: 2.6, casual: 2.2 }, // GUESS a waiting bot goes by itself at this end time
+  shK: { easy: .2, normal: .45, hard: .7, casual: .45 },     // GUESS x MVLV.shv: chance per plan to shove a runner next to it
+};
+MGDEF.curl = {
+  name: 'Ice Rink Curling', kind: 'Action · 3 ends on the ice', move: true, teamSafe: true, C: CURL,
+  how: 'Run up your lane and belly-slide onto the target at the far end. Action = slide (press it in the gold zone for a bigger push); the red line launches you anyway. While sliding: stick forward = slide further, back = brake, sideways = steer. Bump the pups lying on the target off it. Button 4, then 3 / 2 / 1, +1 for the closest. Most points after 3 ends wins.',
+  teamTxt: 'Played as teams: the better team total per pup wins.',
+  init(ps, opts = {}) {
+    const C = CURL, n = ps.length, z = v => ps.map(() => v), Wz = +(C.W0 + C.Wn * n).toFixed(2), lw = +Math.min(1.7, (2 * Wz - 1.8) / Math.max(1, n - 1)).toFixed(2);
+    const pm = ps.map((p, k) => pmNew(C.xS - .8, +((k - (n - 1) / 2) * lw).toFixed(2), 0));
+    return { ps, n, t: 0, Wz, lw, pm, bk: pmBk(ps).map(b => Object.assign(b, { la: false, e: -1 })), hs: 0,
+      ph: z(0), sc: z(0), pts: z(-1), rg: z(-1), cl: -1, end: 0, ep: 0, et: 0, lp: z(0), lt: z(-9), oa: z(-9), fx: [], fid: 0 };
+  },
+  lvl: pl => pl && pl.ai === 'casual' ? 'casual' : ['easy', 'normal', 'hard'][cpuLvl(pl)],
+  rival(s, k, j) { return j !== k && (!s.teams || s.teams[j] !== s.teams[k]); },
+  // the run-up: PupMover for the pups still in it (sliders / stones / outs are hidden from it), walls round the zone
+  run(s, I, dt, practice) {
+    const C = CURL, hid = s.ph.map(h => h > 0);
+    hid.forEach((h, k) => { if (h) s.pm[k].out = true; });
+    pmStep(s, I, dt, {});
+    hid.forEach((h, k) => { if (h) s.pm[k].out = false; });
+    const r = PMV.r, zl = s.Wz - r;
+    s.pm.forEach((p, k) => {
+      if (s.ph[k]) return;
+      if (p.x < C.xMin + r) { p.x = C.xMin + r; if (p.vx < 0) p.vx *= -.4; }
+      if (Math.abs(p.z) > zl) { p.z = Math.sign(p.z) * zl; if (p.vz * p.z > 0) p.vz *= -.4; }
+      if (practice && p.x > C.xR - .05) { p.x = C.xR - .05; if (p.vx > 0) p.vx = 0; } /* the ready card: the line is a wall */
+    });
+  },
+  practice(s, dt, I) { this.run(s, I, dt, true); },
+  launch(s, k, perf) {
+    const C = CURL, p = s.pm[k];
+    const a = clamp(Math.atan2(p.vz, Math.max(p.vx, .01)), -C.aMax, C.aMax), sp = Math.max(0, p.vx * Math.cos(a) + p.vz * Math.sin(a)) * (perf ? C.perfK : 1);
+    p.vx = Math.cos(a) * sp; p.vz = Math.sin(a) * sp; p.f = a; p.lg = 0; p.cd = 0;
+    s.ph[k] = sp > .05 ? 1 : 2; s.lp[k] = perf ? 1 : 0; s.lt[k] = +s.et.toFixed(2);
+  },
+  goOut(s, k, back) {
+    const C = CURL, p = s.pm[k], W = s.Wz;
+    s.ph[k] = 3; s.oa[k] = +s.t.toFixed(2); p.vx = p.vz = 0; p.st = 0; p.lg = 0;
+    if (back) { p.x = C.xB + 1; p.z = clamp(p.z, -W + .4, W - .4); p.f = Math.PI; }
+    else { p.z = Math.sign(p.z) * (W + 1); p.x = clamp(p.x, C.xMin + .5, C.xB); p.f = p.z > 0 ? -Math.PI / 2 : Math.PI / 2; }
+    // don't sit on another pup that is already out
+    for (let tr = 0; tr < 8; tr++) {
+      const o = s.pm.find((q, j) => j !== k && s.ph[j] === 3 && Math.hypot(q.x - p.x, q.z - p.z) < 1.15); if (!o) break;
+      if (back) p.z += (p.z >= o.z ? 1 : -1) * 1.2; else p.x += (p.x >= o.x ? 1 : -1) * 1.2;
+    }
+  },
+  // sliders: friction (sweep / brake from the stick), slight steering; stones lie still; bounces; out of the rink
+  slide(s, I, dt) {
+    const C = CURL, r = PMV.r;
+    s.pm.forEach((p, k) => {
+      if (s.ph[k] < 1 || s.ph[k] > 2) return;
+      p.st = Math.max(0, p.st - dt); p.ns = Math.max(0, p.ns - dt); p.cd = Math.max(0, p.cd - dt); p.lg = 0; p.hit = Math.min(9, p.hit + dt);
+      if (s.ph[k] !== 1) { p.vx = p.vz = 0; return; }
+      const inp = I[k] || NOIN, sp = Math.hypot(p.vx, p.vz);
+      let fa = C.fr; if (inp.mx > .4) fa *= C.sweep; else if (inp.mx < -.4) fa *= C.brake;
+      let a = Math.atan2(p.vz, p.vx);
+      if (sp > .4 && Math.abs(inp.my) > .2) a += clamp(inp.my, -1, 1) * C.steer / Math.max(sp, 1.2) * dt;
+      const ns = Math.max(0, sp - fa * dt);
+      p.vx = Math.cos(a) * ns; p.vz = Math.sin(a) * ns; if (ns > .2) p.f = a;
+      p.x += p.vx * dt; p.z += p.vz * dt;
+      if (ns < .05) { p.vx = p.vz = 0; s.ph[k] = 2; }
+    });
+    // pup-pup bounces (anyone not out, at least one off the run-up): equal masses, a little less than elastic
+    const D = C.r * 2, P = s.pm;
+    for (let i = 0; i < P.length; i++) for (let j = i + 1; j < P.length; j++) {
+      if (s.ph[i] === 3 || s.ph[j] === 3 || !s.ph[i] && !s.ph[j]) continue;
+      const a = P[i], b = P[j]; let dx = b.x - a.x, dz = b.z - a.z, d = Math.hypot(dx, dz);
+      if (d >= D) continue;
+      if (d < 1e-4) { dx = 1; dz = 0; d = 1e-4; }
+      const nx = dx / d, nz = dz / d, ov = (D - d) / 2;
+      a.x -= nx * ov; a.z -= nz * ov; b.x += nx * ov; b.z += nz * ov;
+      const rv = (b.vx - a.vx) * nx + (b.vz - a.vz) * nz;
+      if (rv >= 0) continue;
+      const J = -(1 + C.e) * rv / 2;
+      a.vx -= nx * J; a.vz -= nz * J; b.vx += nx * J; b.vz += nz * J;
+      for (const q of [i, j]) if (s.ph[q] === 2 && Math.hypot(P[q].vx, P[q].vz) > .1) s.ph[q] = 1;
+      if (-rv > 1) { s.fx.push({ id: ++s.fid, x: +((a.x + b.x) / 2).toFixed(2), z: +((a.z + b.z) / 2).toFixed(2), t: +s.t.toFixed(2), v: +(-rv).toFixed(1) }); if (s.fx.length > 6) s.fx.shift(); }
+    }
+    s.pm.forEach((p, k) => {
+      if (s.ph[k] !== 1 && s.ph[k] !== 2) return;
+      if (p.x > C.xB - r) this.goOut(s, k, true);
+      else if (Math.abs(p.z) > s.Wz - r) this.goOut(s, k, false);
+      else if (p.x < C.xMin + r) { p.x = C.xMin + r; if (p.vx < 0) p.vx *= -.5; }
+    });
+  },
+  score(s, k) { return `${s.sc[k]} pt${s.sc[k] === 1 ? '' : 's'}`; },
+  scoreEnd(s) {
+    const C = CURL; let best = -1, bd = 1e9, tie = false;
+    s.pm.forEach((p, k) => {
+      s.rg[k] = -1; s.pts[k] = 0;
+      if (s.ph[k] !== 2) return;
+      const d = Math.hypot(p.x - C.xH, p.z), i = C.rings.findIndex(rr => d <= rr);
+      if (i < 0) return;
+      s.rg[k] = i; s.pts[k] = C.pts[i];
+      if (d < bd - 1e-3) { bd = d; best = k; tie = false; } else if (Math.abs(d - bd) <= 1e-3) tie = true;
+    });
+    s.cl = best >= 0 && !tie ? best : -1;
+    if (s.cl >= 0) s.pts[s.cl] += C.close;
+    s.pts.forEach((v, k) => { s.sc[k] += v; });
+  },
+  update(s, dt, I) {
+    const C = CURL;
+    s.t += dt; s.et += dt;
+    if (s.ep === 3) { if (s.et >= C.ready) { s.ep = 0; s.et = 0; } return; } /* get-ready card: frozen */
+    if (s.ep === 2) {
+      if (s.et < C.beat) return;
+      if (s.end + 1 >= C.ENDS) {
+        if (s.teams) {
+          const per = [0, 1].map(t => s.sc.reduce((a, v, k) => a + (s.teams[k] === t ? v : 0), 0) / Math.max(1, s.teams.filter(x => x === t).length));
+          teamEnd(s, Math.abs(per[0] - per[1]) < 1e-6 ? -1 : per[0] > per[1] ? 0 : 1); s.place = rankScores(s.sc);
+        } else { s.rank = rankScores(s.sc); s.done = true; }
+        return;
+      }
+      // next end: everyone back to the start
+      s.end++; pmReset(s); s.ph.fill(0); s.pts.fill(-1); s.rg.fill(-1); s.cl = -1; s.lp.fill(0); s.lt.fill(-9); s.ep = 3; s.et = 0;
+      s.bk.forEach(b => { b.t = 0; b.la = false; });
+      return;
+    }
+    if (s.ep === 0) {
+      this.run(s, I, dt, false);
+      // launches: Action (not mid-shove / stunned), crossing the release line, or the end's auto-launch time
+      s.pm.forEach((p, k) => {
+        if (s.ph[k]) return;
+        const inp = I[k] || NOIN, press = inp.ap && !p.st && !p.lg;
+        if (press || p.x >= C.xR || s.et >= C.tAuto) this.launch(s, k, press && p.x >= C.xR - C.perfZ && p.x < C.xR);
+      });
+    }
+    this.slide(s, I, dt);
+    if (s.ep === 0) {
+      if (s.ph.every(h => h >= 2)) { s.ep = 1; s.et = 0; }
+      else if (s.et >= C.cap) { s.pm.forEach((p, k) => { if (s.ph[k] === 1) { p.vx = p.vz = 0; s.ph[k] = 2; } }); s.ep = 1; s.et = 0; }
+    } else if (s.ep === 1) {
+      if (s.ph.some(h => h === 1)) return; /* a late bounce still rolling */
+      if (s.et >= C.settle) { this.scoreEnd(s); s.ep = 2; s.et = 0; }
+    }
+  },
+  // ----- bots: per end either go for the button at once (stop-distance error per level) or wait for a rival's stone in
+  // the house and knock it out (hard more often); run straight at the spot, press Action when the slide from here would
+  // stop there; while sliding brake / sweep / steer toward it (per level, once per reaction time); shove neighbours
+  pick(s, k, lv) {
+    const C = CURL, b = s.bk[k];
+    b.e = s.end; b.wait = Math.random() < C.knock[lv] ? 1 : 0; b.dx = gauss() * C.dErr[lv]; b.tx = C.xH; b.tz = 0; b.kn = -1; b.cm = 0; b.cz = 0; b.t2 = 0; b.la = false;
+  },
+  // a rival stone that is (or will stop) in the house, worth knocking out (the leader's / the closest): [x, z] or null
+  knockT(s, k) {
+    const C = CURL; let best = null, bv = -1e9;
+    s.pm.forEach((q, j) => {
+      if (!this.rival(s, k, j) || s.ph[j] !== 1 && s.ph[j] !== 2) return;
+      const sp = Math.hypot(q.vx, q.vz), dS = sp * sp / (2 * C.fr), x = q.x + (sp ? q.vx / sp * dS : 0), z = q.z + (sp ? q.vz / sp * dS : 0); /* where a slider will stop */
+      const d = Math.hypot(x - C.xH, z); if (d > C.rings[3] + .3) return;
+      const v = s.sc[j] * .5 + (C.rings[3] - d) * 2; if (v > bv) { bv = v; best = [x, z]; }
+    });
+    return best;
+  },
+  plan(s, k, L) {
+    const C = CURL, p = s.pm[k], b = s.bk[k], lv = this.lvl(s.ps[k]);
+    let sh = -1;
+    // a rival runner right beside: shove it (per level)
+    let nj = -1, nd = 1e9; s.pm.forEach((q, j) => { if (!this.rival(s, k, j) || s.ph[j] || q.ns > 0 || q.st) return; const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < nd) { nd = d; nj = j; } });
+    if (nj >= 0 && nd < 1.8 && p.x < C.xR - 2.2 && Math.random() < L.shv * C.shK[lv]) sh = nj;
+    if (b.wait) return { x: p.x, z: p.z, sh };
+    return { x: b.tx, z: b.tz, sh };
+  },
+  bot(s, k, dt) {
+    const C = CURL, p = s.pm[k], b = s.bk[k], pl = s.ps[k], lv = this.lvl(pl);
+    if (s.ep !== 0 || s.ph[k] >= 2) { b.la = false; return { mx: 0, my: 0, a: false, b: false }; }
+    if (b.e !== s.end) this.pick(s, k, lv);
+    if (s.ph[k] === 1) {
+      // sliding: once per reaction time, judge the stop point and brake / sweep / steer toward the spot (or don't)
+      b.t2 -= dt;
+      if (b.t2 <= 0) {
+        b.t2 = botRT(pl) * .75;
+        const sp = Math.hypot(p.vx, p.vz), ux = p.vx / (sp || 1), uz = p.vz / (sp || 1), dS = sp * sp / (2 * C.fr);
+        const tx = b.tx + ux * b.dx * .5, proj = (tx - p.x) * ux + (b.tz - p.z) * uz, err = dS - proj, dz = b.tz - (p.z + uz * dS);
+        if (Math.random() < C.fix[lv]) { b.cm = err > .35 ? -1 : err < -.35 ? 1 : 0; b.cz = Math.abs(dz) > .25 ? clamp(dz * 1.5, -1, 1) : 0; }
+        else { b.cm = 0; b.cz = 0; }
+      }
+      return { mx: b.cm, my: b.cz, a: false, b: false };
+    }
+    // run-up: a waiting bot looks for a stone to knock (or gives up waiting), then runs straight at its spot
+    if (b.wait) {
+      const q = this.knockT(s, k);
+      if (q) { b.wait = 0; b.tx = q[0] + C.knockD; b.tz = q[1]; b.dx *= .5; b.t = 0; }
+      else if (s.et >= C.waitT[lv]) { b.wait = 0; b.t = 0; }
+    }
+    const o = Object.assign({}, pmBot.call(this, s, k, dt, this.plan, {})), L = mvLv(pl), sk = (1 - (1 - L.spd) * C.spdK[lv]) / L.spd;
+    o.mx *= sk; o.my *= sk;
+    // press when a slide from here (this speed, + the gold-zone push) would stop at the spot (with this end's error)
+    let a = false;
+    if (!b.wait && !p.st && !p.lg && !o.b) {
+      const sp = Math.hypot(p.vx, p.vz), perf = p.x >= C.xR - C.perfZ ? C.perfK : 1, v = sp * perf;
+      const tx = b.tx + b.dx, rem = Math.hypot(tx - p.x, b.tz - p.z), hd = Math.abs(wrapA(Math.atan2(p.vz, p.vx) - Math.atan2(b.tz - p.z, tx - p.x)));
+      if (sp > 2.5 && hd < .25 && v * v / (2 * C.fr) >= rem) a = true;
+    }
+    o.a = a && !b.la; b.la = a;
+    return o;
+  },
+  // ----- view: an outdoor winter-festival rink: painted ice (lanes, gold push zone, red release line, the house),
+  // white boards with a blue rail, bleachers with a crowd on the far side, frosted pines, snowmen, bunting
+  view(s) {
+    const C = CURL, Wz = s.Wz, v = mgBase('#e6f0fa', '#e4edf6', 110);
+    mgSky(v, '#8fbbe8', '#e9f2fa'); v.scene.fog.near = 40; v.scene.fog.far = 95;
+    const st = snowTex(256, 23); st.repeat.set(47, 47); v.ground.material = texMat(st, { color: '#c3d3e6' }); v.ground.scale.x *= 2.6; v.ground.scale.z *= 2.6;
+    // the ice: one painted canvas (lanes, lines, house) on a plane covering the rink
+    const x0 = C.xMin - .1, x1 = C.xB + .1, Lx = x1 - x0, Lz = 2 * Wz + .2, z0 = -Wz - .1, CW = 2048, CH = 1024, sx = CW / Lx, sz = CH / Lz;
+    const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH; const c = cv.getContext('2d');
+    const X = x => (x - x0) * sx, Z = z => (z - z0) * sz;
+    const gr = c.createLinearGradient(0, 0, 0, CH); gr.addColorStop(0, '#dcebf7'); gr.addColorStop(.5, '#eef6fc'); gr.addColorStop(1, '#e2eef8'); c.fillStyle = gr; c.fillRect(0, 0, CW, CH);
+    let sd = 41; const r01 = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    c.strokeStyle = 'rgba(150,185,220,.22)'; c.lineWidth = 2;
+    for (let i = 0; i < 140; i++) { const x = r01() * CW, y = r01() * CH, a = (r01() - .5) * .5, l = 30 + r01() * 120; c.beginPath(); c.moveTo(x, y); c.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); c.stroke(); }
+    c.fillStyle = 'rgba(255,255,255,.55)'; for (let i = 0; i < 220; i++) c.fillRect(r01() * CW, r01() * CH, 3, 3);
+    // lanes in the run-up: a tinted strip per pup up to the start line, faint dividers to the release line
+    s.ps.forEach((pl, k) => {
+      const zc = s.pm[k].z0, h = s.lw * .8;
+      c.fillStyle = pl.col; c.globalAlpha = .28; c.fillRect(X(C.xMin), Z(zc - h / 2), X(C.xS) - X(C.xMin), h * sz); c.globalAlpha = 1;
+      c.fillStyle = pl.col; c.fillRect(X(C.xS) - 10, Z(zc - h / 2), 10, h * sz);
+    });
+    c.strokeStyle = 'rgba(120,160,210,.35)'; c.lineWidth = 3; c.setLineDash([18, 14]);
+    for (let k = 0; k < s.n - 1; k++) { const zc = (s.pm[k].z0 + s.pm[k + 1].z0) / 2; c.beginPath(); c.moveTo(X(C.xMin), Z(zc)); c.lineTo(X(C.xR), Z(zc)); c.stroke(); }
+    c.setLineDash([]);
+    // start line, gold push zone (chevrons), red release line
+    c.fillStyle = '#5aa8ff'; c.fillRect(X(C.xS) - 4, 0, 8, CH);
+    const zg = c.createLinearGradient(X(C.xR - C.perfZ), 0, X(C.xR), 0); zg.addColorStop(0, 'rgba(255,210,63,.05)'); zg.addColorStop(1, 'rgba(255,200,40,.55)'); c.fillStyle = zg; c.fillRect(X(C.xR - C.perfZ), 0, C.perfZ * sx, CH);
+    c.strokeStyle = 'rgba(240,170,20,.7)'; c.lineWidth = 7; c.lineJoin = 'round';
+    for (let i = 0; i < 6; i++) { const y = (i + .5) / 6 * CH, xm = X(C.xR - C.perfZ * .45); c.beginPath(); c.moveTo(xm - 16, y - 22); c.lineTo(xm + 10, y); c.lineTo(xm - 16, y + 22); c.stroke(); }
+    c.fillStyle = '#ff4d6a'; c.fillRect(X(C.xR) - 8, 0, 16, CH);
+    // centre line + tee line + back line, a big paw print mid-ice
+    c.fillStyle = 'rgba(80,120,190,.45)'; c.fillRect(X(C.xR), Z(0) - 2, X(C.xB) - X(C.xR), 4); c.fillRect(X(C.xH) - 2, 0, 4, CH);
+    c.fillRect(X(C.xH + C.rings[3] + .25) - 2, 0, 4, CH);
+    const paw = (x, z, r) => { c.beginPath(); c.ellipse(X(x), Z(z + r * .25), r * 1.1 * sx, r * .9 * sz, 0, 0, TAU); c.fill(); for (const [dx, dz] of [[-.95, -.75], [-.33, -1.2], [.33, -1.2], [.95, -.75]]) { c.beginPath(); c.ellipse(X(x + dx * r), Z(z + dz * r), r * .38 * sx, r * .45 * sz, 0, 0, TAU); c.fill(); } };
+    c.fillStyle = 'rgba(120,175,235,.28)'; c.save(); c.translate(X(-.6), Z(0)); c.rotate(Math.PI / 2); c.translate(-X(-.6), -Z(0)); paw(-.6, 0, 1.1); c.restore();
+    // the house: blue / white / red rings + gold button, ink outlines
+    const ring = (r, col) => { c.fillStyle = col; c.beginPath(); c.ellipse(X(C.xH), Z(0), r * sx, r * sz, 0, 0, TAU); c.fill(); };
+    ring(C.rings[3], '#3f8ce0'); ring(C.rings[2], '#ffffff'); ring(C.rings[1], '#ff5c6c'); ring(C.rings[0], '#ffd23f');
+    c.strokeStyle = INK; c.lineWidth = 6; for (const r of C.rings) { c.beginPath(); c.ellipse(X(C.xH), Z(0), r * sx, r * sz, 0, 0, TAU); c.stroke(); }
+    c.fillStyle = INK; c.beginPath(); c.ellipse(X(C.xH), Z(0), .1 * sx, .1 * sz, 0, 0, TAU); c.fill();
+    const it = new THREE.CanvasTexture(cv); it.anisotropy = 8;
+    const ice = new THREE.Mesh(new THREE.PlaneGeometry(Lx, Lz).rotateX(-Math.PI / 2), texMat(it, { color: '#ffffff', polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }));
+    ice.position.set((x0 + x1) / 2, .03, 0); ice.receiveShadow = true; ice.userData.noInk = true; v.scene.add(ice);
+    // ring glow overlays for the scoring beat (one per ring, button first)
+    v.glow = C.rings.map((r, i) => {
+      const m = new THREE.Mesh(new THREE.RingGeometry(i ? C.rings[i - 1] : 0, r, 48).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }));
+      m.position.set(C.xH, .05, 0); m.renderOrder = 2; m.userData.noInk = true; m.visible = false; v.scene.add(m); return m;
+    });
+    // boards round the rink (baked): white walls, blue rail, pastel panels on the far side; snow dressing outside
+    const A = new THREE.Group(), cx = (x0 + x1) / 2, bh = .6, nh = .42;
+    const wall = (x, z, w, d, h) => { M(GEO.box, '#fbfdff', x, h / 2, z, A, w, h, d); M(GEO.box, '#5aa8ff', x, h + .05, z, A, w + .02, .1, d + .06); };
+    wall(cx, -Wz - .2, Lx + .4, .2, bh); wall(cx, Wz + .2, Lx + .4, .2, nh); wall(x0 - .1, 0, .2, Lz + .2, bh); wall(x1 + .1, 0, .2, Lz + .2, bh);
+    const PAN = ['#ff8fb1', '#ffd23f', '#7fd0ff', '#b9a0ff', '#9be37a', '#ff9f5c'];
+    for (let i = 0; i < 10; i++) { const x = x0 + 1.4 + i * (Lx - 2.8) / 9; M(GEO.box, PAN[i % PAN.length], x, bh * .5, -Wz - .08, A, 1.6, bh * .62, .04); }
+    // bleachers + crowd behind the far board
+    const bz = -Wz - 2.4;
+    v.crowd = [];
+    for (const [x, w] of [[-9.5, 9], [.5, 9]]) v.crowd.push(MGA.lib ? mgaStand(v, x, bz, w) : bleachers(v.scene, x, bz, w));
+    // snow banks, pines, snowmen at the ends; bunting poles along the far side
+    for (let i = 0; i < 14; i++) { const x = x0 - 1.5 - (i % 2) * .9, z = -Wz - 1 + i * (2 * Wz + 2) / 13; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .9 + hash01(i) * .4, .5, .8); }
+    for (let i = 0; i < 9; i++) { const x = x1 + 2.6 + (i % 2) * 1.2, z = -Wz + i * (2 * Wz) / 8; M(GEO_LO.mid, '#f3f8fd', x, -.08, z, A, .8 + hash01(i + 5) * .4, .45, .8); }
+    const rnd = (() => { let q = 91; return () => (q = (q * 16807) % 2147483647) / 2147483647; })();
+    for (let i = 0; i < 5; i++) boardTree(A, x0 - 3.2 - (i % 2) * 1.6, -Wz - 1.5 + i * 2.1, 1 + (i % 3) * .15, 'pine', rnd);
+    for (let i = 0; i < 4; i++) boardTree(A, x1 + 4.6 + (i % 2) * 1.4, -Wz - 1 + i * 2.2, 1 + (i % 3) * .15, 'pine', rnd);
+    for (let i = 0; i < 8; i++) boardTree(A, -16 + i * 4.6 + (i % 2) * 1.3, bz - 4.2 - (i % 3) * .8, 1.15 + (i % 3) * .2, 'pine', rnd);
+    snowMan(A, x0 - 1.7, Wz + .6, .5, 0, 1); snowMan(A, x1 + 2, Wz + .9, -.5, 1, 1); snowMan(A, -4.5, bz - .4, 0, 2, .9);
+    const poles = [-15.5, -10.5, -5, .5, 5.5, 9.8];
+    for (const x of poles) { M(GEO.cyl, '#8a5a3a', x, 2, bz - 1.4, A, .08, 4, .08); M(GEO.sph, '#ffd23f', x, 4.05, bz - 1.4, A, .14); }
+    for (let i = 0; i < poles.length - 1; i++) bunting(A, [poles[i], 3.9, bz - 1.4], [poles[i + 1], 3.9, bz - 1.4], 10, .5);
+    frostGroup(A, .5, .05);
+    mgaBake(v, A);
+    // sliding streaks (instanced flat strokes on the ice) + ice spray puffs
+    const NS = 360, sm = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: .55, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 });
+    v.str = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), sm, NS); v.str.userData.noInk = true; v.str.frustumCulled = false; v.str.renderOrder = 1; v.str.count = 0;
+    v.str.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(NS * 3), 3); v.scene.add(v.str);
+    v.sl = []; v.slN = NS; v.slEnd = s.end;
+    mgDust(v, '#f6fbff', 90);
+    v.mx = new THREE.Matrix4(); v.q = new THREE.Quaternion(); v.p3 = new THREE.Vector3(); v.s3 = new THREE.Vector3(); v.col = new THREE.Color(); v.cB = new THREE.Color('#9dbfe6'); v.cW = new THREE.Color('#ffffff'); v.up = new THREE.Vector3(0, 1, 0);
+    v.fxSeen = s.fx.length ? s.fx[s.fx.length - 1].id : 0; v.ph0 = s.ph.slice(); v.ep0 = s.ep; /* a guest joining mid-game doesn't replay old events */
+    addPups(v, s.ps);
+    v.tg = new THREE.Vector3(); v.cp = new THREE.Vector3();
+    this.cam(s, v, 0);
+    return pmView(v);
+  },
+  // camera: the whole rink from the front while anyone is in the run-up, closer on the slide once all have launched
+  // (eased on the view clock), and the scoring beat swings in on the house
+  cam(s, v, u) {
+    const C = CURL, k = 1 + (s.Wz - 4.4) * .06, w = v.cw || 0;
+    const ax = lerp(-3.1, -.9, w), az = lerp(-1.5, -1, w), D = lerp(22, 17.5, w) * k, el = .86;
+    const bx = C.xH - .2, bz = .2, D2 = 14.5 * k, el2 = .95;
+    const tx = lerp(ax, bx, u), tz = lerp(az, bz, u), d = lerp(D, D2, u), e = lerp(el, el2, u);
+    v.tg.set(tx, 0, tz); v.cp.set(tx, Math.sin(e) * d, tz + Math.cos(e) * d);
+    v.cam.position.copy(v.cp); v.cam.lookAt(v.tg);
+  },
+  slideAct(s, p, k) {
+    const sp = Math.hypot(p.vx, p.vz), mv = s.ph[k] === 1;
+    return { lean: 1.32, bob: .42, aX: [-2.95, -2.95], aZ: [.62, .62], lX: [.3, .3], hX: -1.05, ears: mv ? .8 : .3, mouth: mv ? .55 : .15, eyes: mv && sp > 2.5 ? 'sq' : 'o', w: 1 };
+  },
+  sync(s, v) {
+    const C = CURL;
+    dustTick(v);
+    // camera: swing in for the scoring beat, back out on the get-ready card
+    const u = s.ep === 2 ? clamp(s.et / .7, 0, 1) : s.ep === 3 ? 1 - clamp(s.et / .7, 0, 1) : 0, ue = u * u * (3 - 2 * u);
+    const cdt = clamp(NOW - (v.cN || NOW), 0, .1), want = s.ep === 3 || s.ph.some(h => h === 0) ? 0 : 1; v.cN = NOW;
+    v.cw = s.ep === 3 ? 0 : (v.cw || 0) + (want - (v.cw || 0)) * Math.min(1, cdt * 2.2);
+    this.cam(s, v, ue); v.cam0.copy(v.cam.position);
+    // streaks: a new end clears them; sliders lay a stroke every few cm of travel (view memory)
+    if (v.slEnd !== s.end) { v.slEnd = s.end; v.sl.length = 0; }
+    s.pm.forEach((p, k) => {
+      const m = mgMem(v, k), sp = Math.hypot(p.vx, p.vz);
+      if (s.ph[k] === 1 && sp > .6) {
+        if (m.sx == null || Math.hypot(p.x - m.sx, p.z - m.sz) > .25) {
+          if (m.sx != null && Math.hypot(p.x - m.sx, p.z - m.sz) < 1.5) v.sl.push({ x: (p.x + m.sx) / 2, z: (p.z + m.sz) / 2, a: Math.atan2(p.z - m.sz, p.x - m.sx), l: Math.hypot(p.x - m.sx, p.z - m.sz), w: .07 + Math.min(sp, 5) * .018, t: NOW });
+          if (v.sl.length > v.slN) v.sl.shift();
+          m.sx = p.x; m.sz = p.z;
+        }
+        if (NOW - (m.sp || 0) > .07 && sp > 1.4) { m.sp = NOW; const fx = Math.cos(p.f), fz = Math.sin(p.f); dustPuff(v, p.x + fx * .6, .12, p.z + fz * .6, 1, .7 + sp * .08, .7); }
+      } else { m.sx = null; }
+      // launch: a big spray + whoosh (from the state change, so guests see it)
+      if (v.ph0[k] === 0 && s.ph[k] === 1) { dustPuff(v, p.x, .15, p.z, s.lp[k] ? 9 : 5, 1.4, 1); sfx('whoosh'); }
+      if (v.ph0[k] !== 3 && s.ph[k] === 3) { sfx('bad'); mgRe(v, k, 'surprise'); }
+      v.ph0[k] = s.ph[k];
+    });
+    let n = 0; const S = v.str;
+    for (const q of v.sl) {
+      const age = NOW - q.t, f = clamp(1 - age / 9, .25, 1);
+      v.q.setFromAxisAngle(v.up, -q.a); v.mx.compose(v.p3.set(q.x, .045, q.z), v.q, v.s3.set(q.l + .08, 1, q.w * f));
+      S.setMatrixAt(n, v.mx); S.setColorAt(n, v.col.copy(v.cB).lerp(v.cW, 1 - f)); n++;
+    }
+    S.count = n; S.instanceMatrix.needsUpdate = true; if (S.instanceColor) S.instanceColor.needsUpdate = true;
+    // knocks: a spray burst + bonk (once each)
+    for (const e of s.fx) { if (e.id <= v.fxSeen) continue; v.fxSeen = e.id; dustPuff(v, e.x, .3, e.z, Math.min(12, 4 + Math.round(e.v * 2)), 1.6, 1.2); sfx('bonk'); }
+    // scoring beat: rings that scored glow and pulse; pups with points pop a sound once
+    if (s.ep === 2 && v.ep0 !== 2) { s.pm.forEach((p, k) => { if (s.pts[k] > 0) mgRe(v, k, 'happy'); }); sfx(s.pts.some(x => x > 0) ? 'coin' : 'loss'); }
+    if (s.ep === 0 && v.ep0 === 3) sfx('whistle');
+    v.ep0 = s.ep;
+    v.glow.forEach((m, i) => {
+      const on = s.ep === 2 && s.rg.includes(i); m.visible = on;
+      if (on) m.material.opacity = (.25 + .2 * Math.sin(NOW * 9 + i)) * clamp(s.et / .3, 0, 1);
+    });
+    v.crowd.forEach(b => crowdBob(b, .1, s.ep === 2 ? 1.6 : s.ph.some(h => h === 1) ? 1 : .4));
+    // pups: run-up = normal mover pose; sliding / lying = belly slide (front paws forward, body centred on the stone);
+    // out = sits behind the boards, dizzy then sad
+    s.pm.forEach((p, k) => {
+      const o = v.pups[k], h = s.ph[k]; if (!o) return;
+      const rg = o.userData.ring || (o.userData.ring = o.children.find(c => c.geometry === RING_GEO));
+      if (rg) rg.position.z = h === 1 || h === 2 ? (o.userData.dog ? C.bodyFd : C.bodyF) / (o.scale.z || 1) : 0; /* the colour ring stays on the scoring spot */
+      if (h === 1 || h === 2) {
+        const act = this.slideAct(s, p, k);
+        if (s.ep === 2 && s.pts[k] >= 2) { act.eyes = 'h'; act.mouth = .9; }
+        pmPose(s, v, k, 0, { act, emote: '', et: 0 });
+        const bf = o.userData.dog ? C.bodyFd : C.bodyF; o.position.x -= Math.sin(o.rotation.y) * bf; o.position.z -= Math.cos(o.rotation.y) * bf; /* the model's own (eased) heading, so the ring stays put */
+      } else if (h === 3) {
+        const a = s.t - s.oa[k];
+        pmPose(s, v, k, 0, { act: { w: 0 }, sit: true, emote: a < 1.6 ? 'dizzy' : 'sad', et: a < 1.6 ? a : .4, hold: true });
+      } else {
+        const act = s.ep === 0 && p.x > C.xR - C.perfZ && !p.lg && !(p.hit < .25) ? { lean: .3, crouch: .25, aX: [-1.2, -1.2], ears: .4 } : {};
+        pmPose(s, v, k, 0, Object.assign({ act }, reOpt(v, k)));
+      }
+    });
+    pmFx(s, v);
+    v.cam.lookAt(v.tg);
+  },
+  hud(s, v) {
+    const C = CURL;
+    s.pm.forEach((p, k) => { const h = s.ph[k]; if (s.ep === 2 && h === 2) return; /* the points chip replaces the tag */ const [x, y] = toScreen(p.x, h === 1 || h === 2 ? 1.75 : h === 3 ? 2.3 : 2.95, p.z, v.cam); tag(s.ps[k], x, y); });
+    pmHud(s, v, 2.6);
+    // pops: Great push! on a gold-zone launch, OUT! when a pup leaves the rink
+    s.pm.forEach((p, k) => {
+      const [x, y] = toScreen(p.x, 2.4, p.z, v.cam);
+      const la = s.ep <= 1 && s.lp[k] && s.lt[k] >= 0 ? s.et - s.lt[k] : 9;
+      if (la >= 0 && la < 1) { g.save(); g.translate(x, y - 40 - la * 30); g.globalAlpha = clamp((1 - la) / .3, 0, 1); T('Great push!', 0, 0, 22, '#ffd23f', 'center', { lw: 5 }); g.restore(); }
+      const oa = s.t - s.oa[k];
+      if (s.ph[k] === 3 && oa < 1.2) { const sc = .6 + easeBack(clamp(oa / .15, 0, 1)) * .5; g.save(); g.translate(x, y - 30 - oa * 20); g.scale(sc, sc); g.globalAlpha = clamp((1.2 - oa) / .3, 0, 1); T('OUT!', 0, 0, 30, '#ff5c8a', 'center', { lw: 6 }); g.restore(); }
+    });
+    // scoring beat: a chip in the pup's colour pops over every pup lying on the ice with its points (gold ring + star =
+    // the closest one)
+    if (s.ep === 2) {
+      s.pm.forEach((p, k) => {
+        if (s.ph[k] !== 2) return;
+        const a = clamp(s.et - .35 - k * .06, 0, 9); if (a <= 0) return;
+        const [x, y] = toScreen(p.x, 1.75, p.z, v.cam), sc = .5 + easeBack(clamp(a / .2, 0, 1)) * .5, pt = s.pts[k], pl = s.ps[k];
+        g.save(); g.translate(x, y - Math.min(a, .5) * 16); g.scale(sc, sc);
+        ell(0, 0, 25, 25, pl.col, k === s.cl ? '#ffd23f' : INK, k === s.cl ? 5 : 3);
+        T(pt > 0 ? `+${pt}` : '0', 0, 1, pt >= 4 ? 25 : 23, pt > 0 ? '#fff' : '#e8edf5', 'center', { lw: 4 });
+        if (k === s.cl) ICON.draw(g, 'star', 22, -22, 22);
+        g.restore();
+      });
+      T(`End ${s.end + 1} scored!`, W / 2, H - 70, 34, '#fff', 'center', { lw: 7 });
+    }
+    if (s.ep === 3) {
+      const a = clamp(s.et / .25, 0, 1);
+      g.save(); g.translate(W / 2, H / 2 - 40); g.scale(.6 + easeBack(a) * .4, .6 + easeBack(a) * .4);
+      T(`End ${s.end + 1}`, 0, 0, 90, '#ff5c8a', 'center', { lw: 10 }); T(s.end + 1 === C.ENDS ? 'Last end!' : 'Get set…', 0, 64, 28, '#fff', 'center', { lw: 6 }); g.restore();
+    }
+    if (MS && MS.phase !== 'intro') {
+      T(`End ${Math.min(s.end + 1, C.ENDS)}/${C.ENDS}`, W / 2, 30, 26, '#fff', 'center', { lw: 5 });
+      const left = C.tAuto - s.et;
+      if (s.ep === 0 && MS.phase === 'play' && s.ph.some(h => h === 0) && left < 3) T(`Slide! Auto-launch in ${Math.ceil(left)}`, W / 2, 112, 22, '#ff5c8a', 'center', { lw: 5 });
+    }
+    // top chips: each pup (FFA) or each side (teams) with its total
+    if (s.teams) {
+      const tn = MS && MS.opts && MS.opts.tname, cw = 230, x0 = W / 2 - cw / 2 - 10;
+      [0, 1].forEach(t => {
+        const x = x0 + t * (cw + 20), y = 70, col = s.tcol ? s.tcol[t] : '#888', tot = s.sc.reduce((a, q, k) => a + (s.teams[k] === t ? q : 0), 0);
+        rr(x - cw / 2, y - 17, cw, 34, 16); g.fillStyle = col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+        T(`${(tn && tn[t]) || (t ? 'Team 2' : 'Team 1')} · ${tot}`, x, y + 1, 16, '#fff', 'center', { lw: 3 });
+      });
+    } else {
+      const cw = 110, x0 = Math.max(W / 2 - s.n * cw / 2 + cw / 2, 430); /* clear of the tip pill */
+      s.ps.forEach((pl, k) => {
+        const x = x0 + k * cw, y = 70;
+        rr(x - 52, y - 16, 104, 32, 15); g.fillStyle = pl.col; g.fill(); g.lineWidth = 2.5; g.strokeStyle = INK; g.stroke();
+        T(pl.name.slice(0, 7), x - 14, y + 1, 13, '#fff', 'center', { lw: 3 }); T(String(s.sc[k]), x + 33, y + 1, 18, '#fff', 'center', { lw: 4 });
+      });
+    }
+  },
+};
+MGCARD.curl = { ic: 'star', btn: 'move', ctl: 'move', goal: 'Most points after 3 ends on the ice.', press: 'Run up, Action = belly-slide. Steer, sweep or brake.', push: 'Shove in the run-up. Slide into pups to knock them off!', score: 'Button 4 · Rings 3 / 2 / 1 · Closest +1.', tip: 'Slide onto the target · Knock the others off!' };
 
 /* ===== Screens (DOM) ===== */
 function setScreen(name) {
