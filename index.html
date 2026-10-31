@@ -7207,7 +7207,7 @@ function mgIntroCard(m) {
 }
 /* Action-mode intro: a slim card at the top + a ready strip at the bottom, so the arena stays visible and everyone can
    run around and shove (practice) while the others get ready. Each player's chip shows THEIR controls. */
-function moveDemo(x, y, w, h, t, c) {
+function moveDemo(x, y, w, h, t, c, bl) { /* bl: the B button's own label (def.ctlLab), else Push + BONK! */
   rr(x, y, w, h, 20); g.fillStyle = '#f3ecff'; g.fill(); g.lineWidth = 3; g.strokeStyle = 'rgba(59,42,69,.25)'; g.stroke();
   const cx = x + 66, cy = y + h / 2 + 4, ph = Math.floor(t / .45) % 4, dirs = [[0, -1], [1, 0], [0, 1], [-1, 0]];
   // movement: four little caps (or a stick), the lit one cycles
@@ -7226,8 +7226,8 @@ function moveDemo(x, y, w, h, t, c) {
   rr(bx - 30, cy - 12, 60, 40, 12); g.fillStyle = INK; g.fill();
   rr(bx - 30, cy - 20 + dn * 7, 60, 38, 12); g.fillStyle = '#ff8fb1'; g.fill(); g.lineWidth = 3; g.strokeStyle = INK; g.stroke();
   T(c[2] || 'B', bx, cy - 2 + dn * 7, c[2] && c[2].length > 2 ? 13 : 20, INK, 'center', { stroke: false, d: true });
-  T('Push', bx, y + 18, 15, '#ff5c8a', 'center', { stroke: false, d: true });
-  if (dn || p > .86 && p < 1.1) T('BONK!', bx, cy + 44, 16, '#ff5c8a', 'center', { lw: 4, d: true });
+  T(bl || 'Push', bx, y + 18, 15, '#ff5c8a', 'center', { stroke: false, d: true });
+  if (!bl && (dn || p > .86 && p < 1.1)) T('BONK!', bx, cy + 44, 16, '#ff5c8a', 'center', { lw: 4, d: true });
 }
 function mgIntroMove(m, card) {
   const pop = easeBack(Math.min(1, m.t / .35));
@@ -7238,14 +7238,17 @@ function mgIntroMove(m, card) {
   g.font = cfont(18); const tw = g.measureText(tg).width + 50; rr(W / 2 - tw / 2, 36, tw, 32, 16); g.fillStyle = m.opts.duel ? '#ff8a1f' : tm ? '#3fa7ff' : '#46c96b'; g.fill(); g.lineWidth = 3; g.strokeStyle = INK; g.stroke(); T(tg, W / 2, 52, 18, '#fff', 'center', { lw: 4 });
   T(m.def.name, W / 2, 98, 44, '#ff5c8a', 'center', { lw: 7 });
   const me = NET.mode === 'client' ? m.ps.find(p => p.remote === NET.me) : m.ps.find(p => !p.cpu && !p.remote);
-  moveDemo(222, 126, 236, 142, m.t, me ? ctlOf(me) : ['W A S D', 'F', 'G']);
-  const rows = [['trophy', 'Goal', card.goal, '#ff8a1f'], ['shoe', 'Move', card.press, '#7a4fc0'], ['paw', 'Push', card.push, '#ff5c8a'], ['star', 'Score', card.score, '#3fa7ff']];
+  // def.ctlLab(s, k) = [action, push, side] words for pup k (games where sides have different controls, e.g. Giant Brawl)
+  const lab = k => m.def.ctlLab ? m.def.ctlLab(m.st, k) : null, ml = me ? lab(m.ps.indexOf(me)) : null;
+  moveDemo(222, 126, 236, 142, m.t, me ? ctlOf(me) : ['W A S D', 'F', 'G'], ml && ml[1][0].toUpperCase() + ml[1].slice(1));
+  const rows = card.rows || [['trophy', 'Goal', card.goal, '#ff8a1f'], ['shoe', 'Move', card.press, '#7a4fc0'], ['paw', 'Push', card.push, '#ff5c8a'], ['star', 'Score', card.score, '#3fa7ff']];
   rows.forEach(([ic, lab, txt, col], i) => {
     const ry = 132 + i * 36; ell(494, ry + 12, 15, 15, '#fff', col, 3); ICON.draw(g, ic, 494, ry + 12, 19);
     T(lab.toUpperCase(), 518, ry + 12, 13, col, 'left', { stroke: false, d: true });
     wrapLeft(txt, 572, ry + 12, 490, 17, 20, INK, 1);
   });
   if (tm && !m.def.only) T(m.def.teamTxt || 'Played as teams: the better average place wins.', 572, 276, 13, '#7a4fc0', 'left', { stroke: false, w: 600 });
+  else if (tm && m.def.target) T(`🎯 ${m.def.target(m.st)}`, 572, 276, 13, '#d9480f', 'left', { stroke: false, w: 700 });
   g.restore();
   // bottom strip: who is ready + their controls
   const n = m.n, sp = Math.min(190, 1180 / n), y = H - 64;
@@ -7255,7 +7258,8 @@ function mgIntroMove(m, card) {
     const x = W / 2 + (k - (n - 1) / 2) * sp, bob = m.ready[k] ? Math.sin(NOW * 10 + k) * 3 : 0, c = ctlOf(p);
     faceAt(p, x - sp / 2 + 34, y + 2 + bob, 20);
     T(m.ready[k] ? '✔ Ready' : `Press ${c[1] || btnLabel(p)}`, x - sp / 2 + 62, y - 10, 15, m.ready[k] ? '#46c96b' : INK, 'left', { stroke: false, w: 700 });
-    T(p.cpu ? 'CPU' : c[2] ? `${c[0]} · ${c[2]} push` : c[0], x - sp / 2 + 62, y + 12, 12, '#7a6a80', 'left', { stroke: false, w: 600 });
+    const l = lab(k);
+    T(p.cpu ? (l && l[2] ? `CPU · ${l[2]}` : 'CPU') : c[2] ? (l ? `${c[1]} ${l[0]} · ${c[2]} ${l[1]}` : `${c[0]} · ${c[2]} push`) : c[0], x - sp / 2 + 62, y + 12, 12, '#7a6a80', 'left', { stroke: false, w: 600 });
   });
   const left = Math.ceil(MG_WAIT - m.t);
   T(left <= 10 ? `Try it out: run and shove! · Starts by itself in ${left} s` : 'Try it out: run and shove! Press your action button when ready', W / 2, y + 44, 13, left <= 10 ? '#d9480f' : '#8a7a90', 'center', { stroke: false, w: 600 });
@@ -10247,6 +10251,464 @@ MGDEF.curl = {
   },
 };
 MGCARD.curl = { ic: 'star', btn: 'move', ctl: 'move', goal: 'Most points after 3 ends on the ice.', press: 'Run up, Action = belly-slide. Steer, sweep or brake.', push: 'Shove in the run-up. Slide into pups to knock them off!', score: 'Button 4 · Rings 3 / 2 / 1 · Closest +1.', tip: 'Slide onto the target · Knock the others off!' };
+/* --- A11. Giant Brawl (new, 1 vs Pack only, 2026-10-31): the lone pup is a GIANT (x GIANT.sc, slower, a big HP bar
+   top-centre) in a round sand arena with a fence, bleachers and a crowd. Giant: move; Action = ground slam (GIANT.slamW
+   wind-up: the giant crouches, a glowing ring shows the wave's reach and cracks spread, then a shockwave ring runs out
+   to GIANT.slamR and hits every pack pup on the ground it passes); Push = charge (a GIANT.chW crouch with a glowing
+   lane, then a dash: pups in the way are bowled over; hitting the fence = the giant is dizzy for GIANT.dizzy s). Both
+   have cooldowns, and the giant stands still for GIANT.rec after each one (a window to bite). Pack: move; Action = bite
+   when next to the giant (from behind, more than GIANT.backA from where it faces, = GIANT.backD damage); Push = hop
+   (a pup higher than GIANT.clear lets the shockwave pass under). A slam / charge hit = -1 of GIANT.HP, knockback, a
+   short flinch, then GIANT.inv of harmless flashing; at 0 the pup trudges to the bench behind the arena (dizzy).
+   Win (teamEnd): the pack drains the giant's HP = pack wins; every pack pup out, or the GIANT.DUR cap = giant wins.
+   Giant HP comes from GIANT.GH by pack size, so 1 vs 2 and 1 vs 5 are both a fight.
+   State (plain JSON): s.gk = the giant's index (team 0), s.gh / s.gH its HP, s.ga action (0 free, 1 slam wind-up, 2
+   charge crouch, 3 charging, 4 dizzy, 5 recovering) + s.gt time in it + s.gd charge angle, s.gs / s.gc cooldowns, s.ch
+   bitmask of pups this charge already hit; s.wv shockwaves { id, x, z, r, h (hit bitmask) }; s.fx last 8 events { id,
+   t, x, z, k, ty (0 bite, 1 back bite, 2 pup hit, 3 slam, 4 fence bonk, 5 whiff), d, out }; per pup hp, iv (harmless
+   time left), hc (hop cooldown), bc (bite cooldown), ba (time since the last bite, view), dm (damage dealt), outAt, ob
+   (bench spot). The giant moves itself (own integrator, radius gR); the pack runs on pmStep with the giant hidden. --- */
+const GIANT = {
+  DUR: 60,        // GUESS hard cap (spec)
+  R0: 8,          // GUESS arena radius base; R = R0 + Rn x pups (3: 9.2, 4: 9.6, 6: 10.4)
+  Rn: .4,         // GUESS
+  sc: 2.2,        // GUESS giant scale (spec ~2.2)
+  gR: 1.15,       // GUESS giant body radius (pups are pushed out to gR + .6)
+  gSpd: 3.5,      // GUESS giant top speed (pack 5.2)
+  gAcc: 16,       // GUESS giant acceleration
+  gTurn: 3.2,     // GUESS giant turn rate (rad/s): slow enough that the pack can get behind it (5.5: back bites were ~15 %)
+  GH: [0, 20, 32, 45, 56, 70], // GUESS giant HP by pack size (index = pack pups, 1..5); tuned on bot runs: giant ~40-50 % at 2-5 normal pups
+  HP: 3,          // GUESS pack pup hits to go out (spec)
+  bite: .55,      // GUESS bite cooldown
+  reach: .65,     // GUESS bite reach past touching (centre distance < gR + .6 + reach)
+  backA: 1.95,    // GUESS a bite from more than this angle off the giant's facing = from behind
+  backD: 2,       // GUESS back-bite damage (front = 1)
+  slamW: .7,      // GUESS slam wind-up (telegraph)
+  slamR: 5.2,     // GUESS shockwave reach
+  slamV: 8.5,     // GUESS shockwave speed (units/s)
+  slamTh: .45,    // GUESS shockwave half-thickness for the hit test
+  slamCd: 3.4,    // GUESS slam cooldown (from the release)
+  clear: .38,     // GUESS a pup this high lets the wave pass under
+  chW: .6,        // GUESS charge crouch (telegraph)
+  chV: 12.5,      // GUESS charge speed
+  chT: .55,       // GUESS charge time (~6.9 units)
+  chCd: 3.4,      // GUESS charge cooldown (from the start of the dash)
+  chHit: .35,     // GUESS extra reach of a charge hit past touching
+  rec: .4,        // GUESS giant stands still after a slam / charge
+  dizzy: 1.1,     // GUESS giant dizzy after charging into the fence
+  kb: 5,          // GUESS knockback speed on a hit (charge x1.3)
+  flinch: .45,    // GUESS no-control time on a hit
+  inv: 1.4,       // GUESS harmless time after a hit (flashing)
+  hopV: 7, G: 22, hopCd: .2, // GUESS hop like Dodge the Cannons (~.64 s in the air)
+  first: 1.2,     // GUESS the giant can't slam / charge in the first second
+  spdK: .5,       // GUESS bots keep this share of their level's MVLV.spd gap (like Cannon / Paint)
+  // pack bots
+  hopP: { easy: .55, normal: .75, hard: .9, casual: .72 },      // GUESS chance a bot hops a wave it saw (else it runs out of reach)
+  hopErr: { easy: .24, normal: .17, hard: .09, casual: .18 },   // GUESS bot hop timing error (s, sd); the clear window is ~.5 s
+  hopLead: .28,   // GUESS bots aim to hop this long before the wave front reaches them (the middle of the window)
+  flank: { easy: .25, normal: .65, hard: .9, casual: .55 },      // GUESS chance a plan goes round the back (else the nearest side)
+  biteD: { easy: .35, normal: .16, hard: .07, casual: .14 },    // GUESS bot delay before each bite (s, mean)
+  dodge: { easy: .45, normal: .7, hard: .9, casual: .7 },       // GUESS chance a bot sidesteps a charge it saw
+  // giant bot
+  gSl: { easy: .45, normal: .75, hard: .95, casual: .7 },       // GUESS chance per decision to slam when 2+ pups are in range
+  gCh: { easy: .25, normal: .5, hard: .7, casual: .45 },        // GUESS chance per decision to charge a lone pup in range
+  gAim: { easy: .35, normal: .2, hard: .08, casual: .22 },      // GUESS charge aim error (rad, sd)
+};
+const gLv = pl => pl && pl.ai === 'casual' ? 'casual' : ['easy', 'normal', 'hard'][cpuLvl(pl)];
+MGDEF.giant = {
+  name: 'Giant Brawl', kind: '1 vs Pack · Topple the giant', only: 'pack', move: true, C: GIANT, /* C: tuning, reachable from the tests */
+  how: 'The lone pup is a giant. Giant: Action = ground slam (a shockwave rolls out), Push = charge. Pack: Action = bite the giant (from behind does double), Push = hop over the shockwave. Three hits and a pack pup is out. The pack wins by draining the giant\'s HP before time runs out; the giant wins by knocking out the whole pack or lasting to the end.',
+  init(ps, opts = {}) {
+    const C = GIANT, n = ps.length, tm = opts.teams || ps.map((p, k) => k ? 1 : 0), gk = Math.max(0, tm.indexOf(0)), m = Math.max(1, n - 1);
+    const R = +(C.R0 + C.Rn * n).toFixed(2), z = () => ps.map(() => 0), pm = [];
+    let j = 0;
+    ps.forEach((p, k) => {
+      if (k === gk) { pm.push(pmNew(0, -1.6, Math.PI / 2)); return; }
+      const a = Math.PI / 2 + (j++ - (m - 1) / 2) * Math.min(.62, 2.8 / m), r = R * .6;
+      pm.push(pmNew(+(Math.cos(a) * r).toFixed(2), +(Math.sin(a) * r).toFixed(2), a + Math.PI));
+    });
+    const gH = C.GH[Math.min(m, C.GH.length - 1)] || C.GH[C.GH.length - 1];
+    return { ps, n, m, gk, t: 0, R, pm, bk: pmBk(ps), hs: 0, gh: gH, gH, ga: 0, gt: 0, gd: Math.PI / 2, gs: C.first, gc: C.first, ch: 0, cn: 0,
+      wv: [], wid: 0, fx: [], fid: 0, hp: ps.map(() => C.HP), iv: z(), hc: z(), bc: z(), ba: ps.map(() => 9), dm: z(), outAt: ps.map(() => Infinity), ob: ps.map(() => null), no: 0, go: 0 };
+  },
+  target(s) { return `Pack: take the giant's ${s.gH} HP in ${GIANT.DUR} s · Giant: knock out all ${s.m}`; },
+  ctlLab(s, k) { return k === s.gk ? ['slam', 'charge', 'Giant'] : ['bite', 'hop', 'Pack']; }, /* intro card: [action, push, side] */
+  fxAdd(s, e) { s.fx.push(Object.assign({ id: ++s.fid, t: +s.t.toFixed(2) }, e)); if (s.fx.length > 8) s.fx.shift(); },
+  alive(s) { return s.pm.filter((p, k) => k !== s.gk && !p.out).length; },
+  // one step of everything that moves; live = false in the ready-card practice (no damage)
+  step(s, I, dt, live) {
+    const C = GIANT, G = s.pm[s.gk], gk = s.gk;
+    // pack: PupMover with the giant hidden and no shoves (Push = hop here)
+    const I2 = s.pm.map((p, k) => { const i = I[k] || NOIN; return k === gk ? NOIN : { mx: i.mx || 0, my: i.my || 0 }; });
+    const was = G.out; G.out = true; pmStep(s, I2, dt, { R: s.R, edge: 'wall' }); G.out = was;
+    s.pm.forEach((p, k) => {
+      if (k === gk) return;
+      s.hc[k] = Math.max(0, s.hc[k] - dt); s.bc[k] = Math.max(0, s.bc[k] - dt); s.ba[k] = Math.min(9, s.ba[k] + dt); s.iv[k] = Math.max(0, s.iv[k] - dt);
+      if (p.out) return;
+      const i = I[k] || NOIN;
+      // hop (Push)
+      if (p.y <= 0 && p.vy === 0) { if (i.bp && !s.hc[k] && !p.st) { p.vy = C.hopV; s.hc[k] = C.hopCd + .5; } }
+      if (p.y > 0 || p.vy !== 0) { p.vy -= C.G * dt; p.y += p.vy * dt; if (p.y <= 0) { p.y = 0; p.vy = 0; s.hc[k] = Math.min(s.hc[k], C.hopCd); } }
+      // bite (Action): a snap toward the giant; in reach = damage (from behind = more)
+      if (i.ap && !s.bc[k] && !p.st) {
+        s.bc[k] = C.bite; s.ba[k] = 0;
+        const dx = p.x - G.x, dz = p.z - G.z, d = Math.hypot(dx, dz);
+        if (d < C.gR + PMV.r + C.reach && p.y < 1.2) {
+          p.f = Math.atan2(-dz, -dx);
+          const back = Math.abs(wrapA(Math.atan2(dz, dx) - G.f)) > C.backA, dmg = back ? C.backD : 1;
+          if (live) { s.gh = Math.max(0, s.gh - dmg); s.dm[k] += dmg; }
+          G.hit = Math.min(G.hit, .3); /* a small flinch on the giant (view) */
+          this.fxAdd(s, { x: +(G.x + dx / d * C.gR).toFixed(1), z: +(G.z + dz / d * C.gR).toFixed(1), k, ty: back ? 1 : 0, d: dmg });
+        } else this.fxAdd(s, { x: +p.x.toFixed(1), z: +p.z.toFixed(1), k, ty: 5 });
+      }
+    });
+    this.giant(s, I[gk] || NOIN, dt, live);
+    this.waves(s, dt, live);
+  },
+  // the giant: free / slam wind-up / charge crouch / charging / dizzy / recovering
+  giant(s, i, dt, live) {
+    const C = GIANT, G = s.pm[s.gk], mx = i.mx || 0, my = i.my || 0, mm = Math.hypot(mx, my);
+    s.gs = Math.max(0, s.gs - dt); s.gc = Math.max(0, s.gc - dt); s.gt += dt; G.hit = Math.min(9, G.hit + dt);
+    let tx = 0, tz = 0;
+    if (s.ga === 0) {
+      if (i.ap && !s.gs) { s.ga = 1; s.gt = 0; }
+      else if (i.bp && !s.gc) { s.ga = 2; s.gt = 0; s.cn++; s.gd = mm > .3 ? Math.atan2(my, mx) : G.f; }
+      else { tx = mx * C.gSpd; tz = my * C.gSpd; }
+    }
+    if (s.ga === 1 && s.gt >= C.slamW) {
+      s.wv.push({ id: ++s.wid, x: +G.x.toFixed(2), z: +G.z.toFixed(2), r: C.gR * .6, h: 0 });
+      s.ga = 5; s.gt = 0; s.gs = C.slamCd; this.fxAdd(s, { x: +G.x.toFixed(1), z: +G.z.toFixed(1), k: s.gk, ty: 3 });
+    } else if (s.ga === 2) {
+      if (mm > .3) s.gd += wrapA(Math.atan2(my, mx) - s.gd) * Math.min(1, dt * 8); /* aim during the crouch */
+      if (s.gt >= C.chW) { s.ga = 3; s.gt = 0; s.ch = 0; s.gc = C.chCd; }
+    } else if (s.ga === 3) {
+      tx = Math.cos(s.gd) * C.chV; tz = Math.sin(s.gd) * C.chV;
+      if (s.gt >= C.chT) { s.ga = 5; s.gt = 0; }
+    } else if ((s.ga === 4 && s.gt >= C.dizzy) || (s.ga === 5 && s.gt >= C.rec)) { s.ga = 0; s.gt = 0; }
+    if (s.ga === 3) { G.vx = tx; G.vz = tz; } else pmApproach(G, tx, tz, C.gAcc * dt);
+    G.x += G.vx * dt; G.z += G.vz * dt;
+    // facing: follows the way it walks (slowly), locked to the charge line
+    if (s.ga === 2 || s.ga === 3) G.f += wrapA(s.gd - G.f) * Math.min(1, dt * 14);
+    else { const sp = Math.hypot(G.vx, G.vz); if (sp > .4) G.f += clamp(wrapA(Math.atan2(G.vz, G.vx) - G.f), -C.gTurn * dt, C.gTurn * dt); }
+    // the fence: a charge into it = dizzy
+    const d = Math.hypot(G.x, G.z), lim = s.R - C.gR;
+    if (d > lim) {
+      G.x *= lim / d; G.z *= lim / d;
+      if (s.ga === 3) { s.ga = 4; s.gt = 0; G.vx = G.vz = 0; G.hit = 0; this.fxAdd(s, { x: +G.x.toFixed(1), z: +G.z.toFixed(1), k: s.gk, ty: 4 }); }
+      else { const vn = (G.vx * G.x + G.vz * G.z) / lim; if (vn > 0) { G.vx -= G.x / lim * vn; G.vz -= G.z / lim * vn; } }
+    }
+    // the giant doesn't budge: pups touching it are pushed out; a charge bowls them over
+    s.pm.forEach((p, k) => {
+      if (k === s.gk || p.out) return;
+      const dx = p.x - G.x, dz = p.z - G.z, dd = Math.hypot(dx, dz) || 1e-4, D = C.gR + PMV.r;
+      if (s.ga === 3 && !(s.ch & (1 << k)) && dd < D + C.chHit && p.y < 1.4) {
+        s.ch |= 1 << k;
+        const ux = Math.cos(s.gd), uz = Math.sin(s.gd), sd = dx * uz - dz * ux >= 0 ? 1 : -1;
+        if (live) this.hitPup(s, k, ux * .7 + uz * sd, uz * .7 - ux * sd, 1.3);
+      }
+      if (dd < D) {
+        const nx = dx / dd, nz = dz / dd; p.x = G.x + nx * D; p.z = G.z + nz * D;
+        const vn = (p.vx - G.vx) * nx + (p.vz - G.vz) * nz; if (vn < 0) { p.vx -= nx * vn; p.vz -= nz * vn; }
+      }
+    });
+  },
+  // shockwaves run out from the slam spot; a pup on the ground the front passes is hit
+  waves(s, dt, live) {
+    const C = GIANT;
+    for (let w = s.wv.length - 1; w >= 0; w--) {
+      const v = s.wv[w], r0 = v.r; v.r = +(v.r + C.slamV * dt).toFixed(3);
+      s.pm.forEach((p, k) => {
+        if (k === s.gk || p.out || v.h & (1 << k)) return;
+        const dx = p.x - v.x, dz = p.z - v.z, d = Math.hypot(dx, dz);
+        if (d < r0 - C.slamTh || d > v.r + C.slamTh || p.y >= C.clear) return;
+        v.h |= 1 << k; if (live) this.hitPup(s, k, dx || .01, dz, 1);
+      });
+      if (v.r >= C.slamR) s.wv.splice(w, 1);
+    }
+  },
+  hitPup(s, k, dx, dz, kk = 1) {
+    const C = GIANT, p = s.pm[k];
+    if (s.iv[k] > 0) return false;
+    s.hp[k]--; s.iv[k] = C.inv;
+    const d = Math.hypot(dx, dz) || 1;
+    p.vx = dx / d * C.kb * kk; p.vz = dz / d * C.kb * kk; p.st = Math.max(p.st, C.flinch); p.lg = 0; p.hit = 0;
+    this.fxAdd(s, { x: +p.x.toFixed(1), z: +p.z.toFixed(1), k, ty: 2 });
+    if (s.hp[k] <= 0) {
+      const j = s.no++;
+      p.out = true; s.outAt[k] = s.t; p.vx = p.vz = 0; p.st = 0; p.y = 0; p.vy = 0;
+      s.ob[k] = [+((j - (s.m - 1) / 2) * 1.6).toFixed(2), +(-(s.R + 2.5)).toFixed(2)]; /* the bench behind the arena */
+      this.fxAdd(s, { x: +p.x.toFixed(1), z: +p.z.toFixed(1), k, out: 1, ty: 2 });
+    }
+    return true;
+  },
+  practice(s, dt, I) { this.step(s, I, dt, false); },
+  update(s, dt, I) {
+    const C = GIANT;
+    if (!s.go) { s.go = 1; s.hc.fill(0); s.iv.fill(0); s.bc.fill(0); s.wv = []; s.ga = 0; s.gt = 0; s.gs = C.first; s.gc = C.first; s.gh = s.gH; s.pm.forEach(p => { p.y = 0; p.vy = 0; }); }
+    s.t += dt;
+    this.step(s, I, dt, true);
+    if (s.gh <= 0) teamEnd(s, 1);
+    else if (!this.alive(s) || s.t >= C.DUR) teamEnd(s, 0);
+  },
+  // knocked-out pups: a dizzy moment, then trudge to the bench and sit (host; guests get it from the snapshots)
+  anim(s, dt) {
+    if (!s.ob) return;
+    s.pm.forEach((p, k) => {
+      const o = s.ob[k]; if (!p.out || !o || p.sit >= 0 || s.t - s.outAt[k] < .7) return;
+      const dx = o[0] - p.x, dz = o[1] - p.z, d = Math.hypot(dx, dz);
+      if (d < .08) { p.x = o[0]; p.z = o[1]; p.y = 0; p.vx = p.vz = 0; p.sit = 0; p.f = Math.PI / 2; return; }
+      const sp = Math.min(d / Math.max(dt, 1e-3), 4.2); p.vx = dx / d * sp; p.vz = dz / d * sp; p.x += p.vx * dt; p.z += p.vz * dt; p.f = Math.atan2(dz, dx); p.y = Math.abs(Math.sin(d * 2.6)) * .16;
+    });
+  },
+  // ----- bots. Pack: circle round to the giant's back and bite, sidestep a charge, and on a slam either hop the wave
+  // (timed, with a per-level chance + error) or run out of reach; every giant move is seen one reaction time late.
+  // Giant: walk at the pack (turning to whoever bites it), slam when 2+ pups are in reach, charge a pup standing alone.
+  packPlan(s, k, L) {
+    const C = GIANT, p = s.pm[k], G = s.pm[s.gk], b = s.bk[k], lv = gLv(s.ps[k]);
+    const dx = p.x - G.x, dz = p.z - G.z, d = Math.hypot(dx, dz) || .01, D = C.gR + PMV.r + C.reach;
+    // a slam winding up (or a wave out): hop it (stay) or run out of reach
+    const wid = s.ga === 1 ? s.wid + 1 : s.wv.length ? s.wv[s.wv.length - 1].id : 0;
+    if (wid) {
+      if (b.wid !== wid) { b.wid = wid; b.hop = d < C.slamR - 1.4 && Math.random() < C.hopP[lv]; b.er = gauss() * C.hopErr[lv]; b.hd = 0; } /* near the rim: run out of reach */
+      if (b.hop || d > C.slamR + .8) return { x: p.x, z: p.z, run: .3 };
+      return { x: G.x + dx / d * (C.slamR + 1.6), z: G.z + dz / d * (C.slamR + 1.6) };
+    }
+    // a charge crouch aimed my way: sidestep
+    if (s.ga === 2 || s.ga === 3) {
+      const ux = Math.cos(s.gd), uz = Math.sin(s.gd), al = dx * ux + dz * uz, lat = dx * uz - dz * ux;
+      if (al > -.5 && al < C.chV * C.chT + 1.5 && Math.abs(lat) < C.gR + 1.4) {
+        if (b.cid !== s.cn) { b.cid = s.cn; b.dg = Math.random() < C.dodge[lv]; }
+        if (b.dg) { const sd = lat >= 0 ? 1 : -1; return { x: p.x + uz * sd * 3.2, z: p.z - ux * sd * 3.2 }; }
+      }
+    }
+    // attack: a spot at bite range, behind the giant (spread between packmates) or the nearest side
+    if (b.fl == null || Math.random() < .08) b.fl = Math.random() < C.flank[lv];
+    const mates = s.pm.map((q, j) => j).filter(j => j !== s.gk && !s.pm[j].out), mi = mates.indexOf(k), mn = mates.length;
+    const ang = Math.atan2(dz, dx), back = G.f + Math.PI + (mn > 1 ? (mi - (mn - 1) / 2) * Math.min(.55, 1.9 / mn) : 0);
+    const want = b.fl ? back : ang, diff = wrapA(want - ang);
+    if (Math.abs(diff) > .9) { const a = ang + Math.sign(diff) * .9, r = D + 1.3; return { x: G.x + Math.cos(a) * r, z: G.z + Math.sin(a) * r }; }
+    const r = D - .35; return { x: G.x + Math.cos(want) * r + G.vx * .25, z: G.z + Math.sin(want) * r + G.vz * .25 };
+  },
+  giantPlan(s, k, L) {
+    const C = GIANT, G = s.pm[k], b = s.bk[k];
+    // turn on a recent biter close by, else the middle of the nearest pups
+    const fx = s.fx.filter(e => (e.ty === 0 || e.ty === 1) && s.t - e.t < .8 && !s.pm[e.k].out).pop();
+    if (fx && Math.random() < .7) { const q = s.pm[fx.k]; return { x: q.x, z: q.z }; }
+    const al = s.pm.map((q, j) => j).filter(j => j !== k && !s.pm[j].out);
+    if (!al.length) return {};
+    al.sort((a, c) => Math.hypot(s.pm[a].x - G.x, s.pm[a].z - G.z) - Math.hypot(s.pm[c].x - G.x, s.pm[c].z - G.z));
+    const near = al.slice(0, 2), x = near.reduce((a, j) => a + s.pm[j].x, 0) / near.length, z = near.reduce((a, j) => a + s.pm[j].z, 0) / near.length;
+    return { x: x * .8, z: z * .8 }; /* a pull to the middle: fights stay in view and away from the fence */
+  },
+  bot(s, k, dt) {
+    const C = GIANT, p = s.pm[k], b = s.bk[k], pl = s.ps[k], L = mvLv(pl), lv = gLv(pl), sk = (1 - (1 - L.spd) * C.spdK) / L.spd;
+    if (p.out) return AX0;
+    if (k === s.gk) {
+      const o = Object.assign({}, pmBot.call(this, s, k, dt, this.giantPlan, { R: s.R, margin: C.gR + 1, phase: s.no })); o.mx *= sk; o.my *= sk; o.a = o.b = false;
+      // charge crouch: keep the stick on the target (aim error per charge)
+      if (s.ga === 2 && b.ct >= 0 && !s.pm[b.ct].out) { const q = s.pm[b.ct], a = Math.atan2(q.z - p.z, q.x - p.x) + (b.ce || 0); o.mx = Math.cos(a); o.my = Math.sin(a); return o; }
+      if (s.ga !== 0) return o;
+      b.dt = (b.dt || 0) - dt; if (b.dt > 0) return o;
+      b.dt = botRT(pl) * .6;
+      const al = s.pm.map((q, j) => j).filter(j => j !== k && !s.pm[j].out), dist = j => Math.hypot(s.pm[j].x - p.x, s.pm[j].z - p.z);
+      const inR = al.filter(j => dist(j) < C.slamR * .82 && s.pm[j].y < .2 && s.iv[j] < .6);
+      if (!s.gs && (inR.length >= 2 || (inR.length && (al.length === 1 || inR.some(j => dist(j) < C.gR + 1.6)))) && Math.random() < C.gSl[lv]) { o.a = true; return o; }
+      if (!s.gc) {
+        const lone = al.filter(j => dist(j) > 2.6 && dist(j) < C.chV * C.chT + .5 && s.iv[j] < .4 && al.every(i => i === j || Math.hypot(s.pm[i].x - s.pm[j].x, s.pm[i].z - s.pm[j].z) > 2.2));
+        if (lone.length && Math.random() < C.gCh[lv]) { const j = lone[0], q = s.pm[j]; b.ct = j; b.ce = gauss() * C.gAim[lv]; const a = Math.atan2(q.z + q.vz * .4 - p.z, q.x + q.vx * .4 - p.x) + b.ce; o.mx = Math.cos(a); o.my = Math.sin(a); o.b = true; return o; }
+      }
+      return o;
+    }
+    const G = s.pm[s.gk], o = Object.assign({}, pmBot.call(this, s, k, dt, this.packPlan, { R: s.R, margin: 1.1, phase: s.ga })); o.mx *= sk; o.my *= sk; o.a = o.b = false;
+    const dx = p.x - G.x, dz = p.z - G.z, d = Math.hypot(dx, dz);
+    // hop the wave front (only the one it planned to hop, seen one reaction time after the wind-up started)
+    if (b.hop && b.wid && p.y <= 0 && p.vy === 0 && !s.hc[k] && !p.st) {
+      const w = s.wv.find(x => x.id === b.wid);
+      const tA = w ? (d - w.r) / C.slamV : s.ga === 1 && s.wid + 1 === b.wid ? (C.slamW - s.gt) + Math.max(0, d - C.gR * .6) / C.slamV : -1;
+      if (tA >= -.05 && tA <= C.hopLead + b.er && !b.hd) { b.hd = 1; o.b = true; return o; }
+    }
+    // bite when in reach (a short human-ish delay each time)
+    if (d < C.gR + PMV.r + C.reach - .05 && !s.bc[k] && !p.st && p.y < .3) {
+      if (b.bw == null) b.bw = Math.max(0, C.biteD[lv] * (.5 + Math.random()));
+      b.bw -= dt; if (b.bw <= 0) { b.bw = null; o.a = true; const a = Math.atan2(-dz, -dx); o.mx = Math.cos(a) * .3; o.my = Math.sin(a) * .3; }
+    } else b.bw = null;
+    return o;
+  },
+  score(s, k) { if (k === s.gk) return `Giant · ${s.gh}/${s.gH} HP`; const p = s.pm[k]; return p.out ? `Out · ${s.dm[k]} dmg` : `${s.dm[k]} dmg · ${s.hp[k]}/${GIANT.HP}`; },
+  // ----- view: a sand arena with a fence, bleachers + crowd, bunting and banners; the giant gets a crown + spiked collar
+  view(s) {
+    const C = GIANT, R = s.R, v = mgBase('#ffd9b8', '#9fd47c', 180);
+    mgSky(v, '#ffb27a', '#ffe8cf'); v.scene.fog.near = 36; v.scene.fog.far = 90;
+    mgStripes(v, '#9fd47c', '#94ca72', 60);
+    // arena floor: sand rings, a painted centre seal, scuffs (one canvas on a disc)
+    const ft = texCanvas(1024, (c, n) => {
+      const h = n / 2; c.fillStyle = '#e6bd80'; c.fillRect(0, 0, n, n);
+      const ring = (r0, r1, col) => { c.beginPath(); c.arc(h, h, r1, 0, TAU); c.arc(h, h, r0, 0, TAU, true); c.fillStyle = col; c.fill(); };
+      ring(h * .93, h, '#d29d62'); ring(h * .9, h * .93, '#fff1d0');
+      ring(h * .3, h * .33, '#d6a86e'); ring(h * .12, h * .14, '#d6a86e');
+      for (let i = 0; i < 260; i++) { const a = hash01(i * 1.7) * TAU, r = Math.sqrt(hash01(i * 3.1 + 1)) * h * .88; c.beginPath(); c.ellipse(h + Math.cos(a) * r, h + Math.sin(a) * r, 6 + hash01(i) * 16, 3 + hash01(i + 9) * 6, a, 0, TAU); c.fillStyle = i % 3 ? 'rgba(200,150,90,.18)' : 'rgba(255,250,230,.35)'; c.fill(); }
+      for (let j = 0; j < 8; j++) { const a = j / 8 * TAU + .2; c.beginPath(); c.ellipse(h + Math.cos(a) * h * .22, h + Math.sin(a) * h * .22, h * .05, h * .025, a, 0, TAU); c.fillStyle = '#ffb08a'; c.fill(); }
+    });
+    const floor = new THREE.Mesh(new THREE.CircleGeometry(R + .3, 80).rotateX(-Math.PI / 2), texMat(ft, { color: '#ffffff' })); floor.position.y = .01; floor.receiveShadow = true; floor.userData.noInk = true; v.scene.add(floor);
+    const curb = new THREE.Mesh(new THREE.RingGeometry(R + .3, R + .95, 80).rotateX(-Math.PI / 2), mat('#c98f6a')); curb.position.y = .02; curb.receiveShadow = true; curb.userData.noInk = true; v.scene.add(curb);
+    // rim (baked): fence ring, banner posts, the bench, flowers + bushes at the sides
+    const A = new THREE.Group(), nf = 28, Rf = R + .6;
+    for (let i = 0; i < nf; i++) { const a0 = i / nf * TAU, a1 = (i + 1) / nf * TAU; mgaFence(A, Math.cos(a0) * Rf, Math.sin(a0) * Rf, Math.cos(a1) * Rf, Math.sin(a1) * Rf, 1.25); }
+    const BAN = ['#ff5c8a', '#ffd23f', '#3fa7ff', '#46c96b', '#b98cff', '#ff8a1f'];
+    v.posts = [];
+    for (let i = 0; i < 8; i++) {
+      const a = Math.PI * (1.08 + i / 7 * .84), x = Math.cos(a) * (R + 1.3), z = Math.sin(a) * (R + 1.3);
+      M(GEO.cyl, '#8a5a3a', x, 1.6, z, A, .12, 3.2, .12); M(GEO.sph, '#ffd23f', x, 3.28, z, A, .2);
+      const fl = M(GEO.box, BAN[i % BAN.length], x, 2.55, z, A, .06, 1.1, .7); fl.rotation.y = -a; v.posts.push([x, 3.1, z]);
+    }
+    const bz = -(R + 2.5), bw = Math.max(5, (s.m - 1) * 1.6 + 1.6);
+    M(GEO.box, '#c98f6a', 0, .42, bz, A, bw, .12, .6); M(GEO.box, '#c98f6a', 0, .75, bz - .3, A, bw, .5, .1);
+    for (const sx of [-1, 1]) M(GEO.box, '#7a4a3a', sx * (bw / 2 - .3), .2, bz, A, .14, .4, .5);
+    for (const sx of [-1, 1]) for (let i = 0; i < 5; i++) { const zz = R * .1 + i * 1.1; if (i % 2) mgaBush(A, sx * (R + 2.2 + (i % 3) * .4), zz, .75, i); else mgaFlower(A, sx * (R + 2), zz, 1.1, i + (sx > 0 ? 3 : 0)); }
+    mgaBake(v, A);
+    // bleachers + crowd round the back half (rotated to face the middle), bunting between the banner posts
+    v.stands = [];
+    for (let i = 0; i < 5; i++) {
+      const a = Math.PI * (1.1 + i / 4 * .8), r = R + 5, w = 5.6;
+      const b = bleachers(v.scene, Math.cos(a) * r, Math.sin(a) * r, w, 3); b.rotation.y = Math.atan2(-Math.cos(a), -Math.sin(a)); v.stands.push(b);
+    }
+    for (let i = 0; i < v.posts.length - 1; i++) bunting(v.scene, v.posts[i], v.posts[i + 1], 8, .45);
+    // telegraphs: slam reach ring + filling disc + cracks under the giant; the charge lane (chevrons); shockwave rings
+    const tmat = (col, map) => new THREE.MeshBasicMaterial({ color: col, map: map || null, transparent: true, opacity: 0, depthWrite: false });
+    const gR = new THREE.RingGeometry(.9, 1, 64).rotateX(-Math.PI / 2), gD = new THREE.CircleGeometry(1, 64).rotateX(-Math.PI / 2), gL = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const lay = (m, y, ro = 2) => { m.userData.noInk = true; m.renderOrder = ro; m.visible = false; m.position.y = y; v.scene.add(m); return m; };
+    v.slR = lay(new THREE.Mesh(gR, tmat('#ff5a3c')), .05); v.slD = lay(new THREE.Mesh(gD, tmat('#ff8a5a')), .04);
+    const ck = texCanvas(512, (c, n) => {
+      c.clearRect(0, 0, n, n); const h = n / 2; c.strokeStyle = 'rgba(90,45,25,.95)'; c.lineCap = 'round'; c.lineJoin = 'round';
+      for (let i = 0; i < 9; i++) {
+        let a = i / 9 * TAU + hash01(i) * .4, x = h, y = h, r = 0; c.lineWidth = 9; c.beginPath(); c.moveTo(x, y);
+        while (r < h * .95) { r += 26 + hash01(i * 7 + r) * 22; a += (hash01(i * 13 + r) - .5) * .7; x = h + Math.cos(a) * r; y = h + Math.sin(a) * r; c.lineTo(x, y); c.lineWidth = Math.max(2, 9 - r / h * 7); }
+        c.stroke();
+      }
+      c.beginPath(); c.arc(h, h, h * .16, 0, TAU); c.fillStyle = 'rgba(120,70,40,.45)'; c.fill();
+    });
+    v.crk = lay(new THREE.Mesh(gD, new THREE.MeshBasicMaterial({ map: ck, transparent: true, opacity: 0, depthWrite: false, color: '#ffffff' })), .045, 3);
+    const chev = texCanvas(64, (c, n) => { c.clearRect(0, 0, n, n); c.fillStyle = 'rgba(255,255,255,.95)'; c.beginPath(); c.moveTo(n * .2, n * .12); c.lineTo(n * .55, n * .5); c.lineTo(n * .2, n * .88); c.lineTo(n * .42, n * .88); c.lineTo(n * .77, n * .5); c.lineTo(n * .42, n * .12); c.closePath(); c.fill(); });
+    chev.wrapS = chev.wrapT = THREE.RepeatWrapping; v.chev = chev;
+    v.lnB = lay(new THREE.Mesh(gL, tmat('#ff7a59')), .035); v.lnA = lay(new THREE.Mesh(gL, tmat('#fff3e0', chev)), .04);
+    v.wav = Array.from({ length: 4 }, () => {
+      const r = lay(new THREE.Mesh(new THREE.RingGeometry(.64, 1, 72).rotateX(-Math.PI / 2), tmat('#ff6a2a')), .06, 3);
+      const wl = lay(new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 72, 1, true), new THREE.MeshBasicMaterial({ color: '#ffb070', transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide })), .25, 3);
+      return { r, wl };
+    });
+    addPups(v, s.ps);
+    // the giant: big, a crown and a spiked collar (both scale with it)
+    const go = v.pups[s.gk]; go.scale.setScalar(C.sc);
+    const crown = actOne('Act_crown') || (() => { const c = new THREE.Group(); M(GEO.cyl, '#ffd23f', 0, .08, 0, c, .32, .16, .32); for (let i = 0; i < 5; i++) { const a = i / 5 * TAU; M(GEO.cone, '#ffd23f', Math.cos(a) * .26, .27, Math.sin(a) * .26, c, .1, .24, .1); } return c; })();
+    crown.scale.setScalar(.62); crown.position.set(0, 1.62, -.02); crown.rotation.z = .12; go.add(crown); v.crown = crown;
+    const col = new THREE.Group(); col.position.y = PUP_HIP + PUP_NECK - .02; go.add(col);
+    M(GEO.torus, '#5a2a3a', 0, 0, 0, col, .3, .3, .5).rotation.x = Math.PI / 2;
+    for (let i = 0; i < 8; i++) { const a = i / 8 * TAU, sp = M(GEO.cone, '#e9e2f5', Math.cos(a) * .33, 0, Math.sin(a) * .33, col, .06, .14, .06); sp.rotation.set(Math.sin(a) * Math.PI / 2, 0, -Math.cos(a) * Math.PI / 2); }
+    v.mx = new THREE.Matrix4();
+    v.fxSeen = s.fx.length ? s.fx[s.fx.length - 1].id : 0; /* a guest joining mid-game doesn't replay old puffs */
+    const kc = (R + 2.6) / 8.6;
+    v.cam.position.set(0, 15.6 * kc, 12.8 * kc); v.cam.lookAt(0, 0, -.4);
+    return pmView(v);
+  },
+  sync(s, v) {
+    const C = GIANT, G = s.pm[s.gk];
+    if (!v.dust) mgDust(v, '#f3dcae', 90); dustTick(v);
+    // slam wind-up: reach ring pulses, the disc fills, cracks spread under the giant
+    const sl = s.ga === 1 ? clamp(s.gt / C.slamW, 0, 1) : 0, after = s.ga === 5 && s.wv.length ? clamp(1 - s.gt / .5, 0, 1) : 0;
+    v.slR.visible = v.slD.visible = sl > 0;
+    if (sl > 0) {
+      v.slR.position.set(G.x, .05, G.z); v.slR.scale.set(C.slamR, 1, C.slamR); v.slR.material.opacity = .6 + .35 * Math.sin(NOW * (12 + sl * 22));
+      v.slD.position.set(G.x, .04, G.z); v.slD.scale.set(Math.max(.01, C.slamR * sl), 1, Math.max(.01, C.slamR * sl)); v.slD.material.opacity = .18 + .2 * sl;
+    }
+    const ck = Math.max(sl, after); v.crk.visible = ck > 0;
+    if (ck > 0) { const r = C.gR * 1.2 + (sl > 0 ? sl : 1) * 1.6; v.crk.position.set(G.x, .045, G.z); v.crk.scale.set(r, 1, r); v.crk.material.opacity = sl > 0 ? .4 + .5 * sl : after; }
+    // charge lane: from the giant along the charge line, pulsing in the crouch, fading while it runs
+    const ch = s.ga === 2 ? clamp(s.gt / C.chW, 0, 1) : s.ga === 3 ? 1 : 0;
+    v.lnA.visible = v.lnB.visible = ch > 0;
+    if (ch > 0) {
+      const ux = Math.cos(s.gd), uz = Math.sin(s.gd), st = s.ga === 3 ? s.gt * C.chV : 0, bq = G.x * ux + G.z * uz, wd = -bq + Math.sqrt(Math.max(0, bq * bq - (G.x * G.x + G.z * G.z) + (s.R - .3) ** 2)) /* to the fence */, L = Math.max(.1, Math.min(C.chV * C.chT - st, wd - C.gR * .5)), c0 = C.gR * .5 + L / 2; /* the giant moves along it: the rest of the lane */
+      for (const m of [v.lnA, v.lnB]) { m.position.x = G.x + ux * c0; m.position.z = G.z + uz * c0; m.rotation.y = -s.gd; m.scale.set(L, 1, (C.gR + PMV.r) * 2); }
+      const op = s.ga === 2 ? .35 + .35 * ch + .15 * Math.sin(NOW * 30) : .3;
+      v.lnB.material.opacity = op * .7; v.lnA.material.opacity = Math.min(1, op * 1.4); v.chev.repeat.set(L / 1.2, 1); v.chev.offset.x = -NOW * 2.2;
+    }
+    // shockwaves: a bright ground ring + a low see-through wall, dust kicked up along the front
+    v.wav.forEach((o, i) => {
+      const w = s.wv[i]; o.r.visible = o.wl.visible = !!w; if (!w) return;
+      const u = clamp(w.r / C.slamR, 0, 1), r = Math.max(.2, w.r);
+      o.r.position.set(w.x, .06, w.z); o.r.scale.set(r + C.slamTh, 1, r + C.slamTh); o.r.material.opacity = 1 - u * .5;
+      o.wl.position.set(w.x, .28 * (1 - u * .3), w.z); o.wl.scale.set(r, .55 * (1 - u * .4), r); o.wl.material.opacity = .45 * (1 - u * .7);
+      const m = mgMem(v, 100 + (w.id % 8)); if (m.id !== w.id) { m.id = w.id; m.p = 0; }
+      if (w.r - m.p > .9) { m.p = w.r; const nP = Math.round(4 + r * 1.6); for (let j = 0; j < nP; j++) { const a = (j + vR()) / nP * TAU; dustPuff(v, w.x + Math.cos(a) * r, .1, w.z + Math.sin(a) * r, 1, 1.1, 1.3); } }
+    });
+    // events (once each): slam = big puff + shake, bites = small puff + giant flinch, hits = puff + surprise
+    for (const e of s.fx) {
+      if (e.id <= v.fxSeen) continue; v.fxSeen = e.id;
+      if (e.ty === 3) { dustPuff(v, e.x, .2, e.z, 18, 2.6, 1.6); v.shk = NOW; v.shA = .42; sfx('hammer'); }
+      else if (e.ty === 4) { dustPuff(v, e.x, .8, e.z, 12, 2, 1.3); v.shk = NOW; v.shA = .3; sfx('bonk'); mgRe(v, s.gk, 'dizzy'); }
+      else if (e.ty === 0 || e.ty === 1) { dustPuff(v, e.x, 1.2, e.z, e.ty ? 5 : 3, 1, .8); if (e.ty) sfx('pop'); }
+      else if (e.ty === 2) { dustPuff(v, e.x, .7, e.z, e.out ? 10 : 7, 1.6, 1.1); if (!e.out && e.k >= 0) mgRe(v, e.k, 'surprise'); }
+    }
+    // pups: pack = hop tuck / bite snap / flinch / flashing; giant = slam crouch (arms up) / charge crouch + dash lean
+    s.pm.forEach((p, k) => {
+      const o = v.pups[k]; if (!o) return;
+      if (k === s.gk) {
+        let act = {};
+        if (s.ga === 1) act = { crouch: .3 + sl * .6, aX: [-2.7 * sl, -2.7 * sl], aZ: [.5, .5], hX: -.25, mouth: .6, eyes: 'sq', ears: .4 };
+        else if (s.ga === 5 && s.wv.length) act = { crouch: .7 * after, aX: [-.6, -.6], aZ: [1, 1], mouth: 1 };
+        else if (s.ga === 2) act = { crouch: .55, lean: .35, aX: [-.9, -.9], hX: -.3, eyes: 'sq', ears: -.4 };
+        else if (s.ga === 3) act = { lean: .5, aX: [-1.7, -1.7], aZ: [.3, .3], lX: [.6, -.6], mouth: .8, eyes: 'sq', ears: -.5 };
+        const ex = s.ga === 4 ? { emote: 'dizzy', et: .5, hold: true } : reOpt(v, k);
+        pmPose(s, v, k, 0, Object.assign({ act, sq: s.ga === 1 ? -sl * .25 : s.ga === 5 && s.wv.length ? .45 * after : G.hit < .15 ? .25 : 0 }, ex));
+        o.scale.setScalar(C.sc);
+        return;
+      }
+      const air = !p.out && p.y > .001, h = hopAct(v, k, air ? p.y : 0), bt = s.ba[k];
+      let ex;
+      if (p.out) ex = p.sit >= 0 ? { emote: 'dizzy', et: .6, hold: true } : s.t - s.outAt[k] < .7 ? { emote: 'dizzy', et: .5, hold: true } : { emote: 'sad', et: .6, hold: true };
+      else if (p.st > 0) ex = reOpt(v, k);
+      else if (bt < .22) ex = { act: { lean: .45 * (1 - bt / .22), aX: [-1.5, -1.5], aZ: [.25, .25], hX: -.2, mouth: 1, eyes: 'sq', ears: -.3 } };
+      else ex = Object.assign({ sq: h.sq, act: h.act }, reOpt(v, k));
+      pmPose(s, v, k, 0, ex);
+      if (!p.out && s.iv[k] > 0 && s.iv[k] < C.inv - .25) o.visible = Math.floor(NOW * 14) % 2 === 0; /* flashing: harmless for now */
+      const m = mgMem(v, k); if (m.wasAir && !air && !p.out) dustPuff(v, p.x, .05, p.z, 3, .8, .8); m.wasAir = air;
+    });
+    v.stands.forEach((b, i) => crowdBob(b, .12, s.ga === 1 || s.ga === 3 ? 1.6 : 1));
+    pmFx(s, v);
+    // slam shake (on top of pmFx's camera; off with reduced motion)
+    const u = v.shk == null ? 9 : (NOW - v.shk) / .45;
+    if (u < 1 && !RMO) { const a = v.shA * (1 - u) * (1 - u); v.cam.position.x += Math.sin(u * 47) * a; v.cam.position.y += Math.sin(u * 61 + 1) * a * .8; }
+  },
+  hud(s, v) {
+    const C = GIANT, G = s.pm[s.gk], gp = s.ps[s.gk];
+    const pips = (x, y, hp, r = 5) => { for (let i = 0; i < C.HP; i++) { g.beginPath(); g.arc(x + (i - (C.HP - 1) / 2) * (r * 2.6), y, r, 0, TAU); g.fillStyle = i < hp ? '#ff6f91' : '#9a93a8'; g.fill(); g.lineWidth = 2.2; g.strokeStyle = INK; g.stroke(); } };
+    s.pm.forEach((p, k) => {
+      if (k === s.gk) { const [x, y] = toScreen(G.x, 2.25 * C.sc, G.z, v.cam); tag(s.ps[k], x, y - 8, ''); return; } /* name + HP are on the bar at the top */
+      const [x, y] = toScreen(p.x, 2.3 + p.y, p.z, v.cam);
+      tag(s.ps[k], x, y, p.out ? 'Out!' : null, p.out ? '#ffb0c0' : '#fff');
+      if (!p.out) pips(x, y - 22, s.hp[k], 5);
+    });
+    pmHud(s, v, 2.3);
+    // pops: bite damage over the giant, OUT! over a pup
+    for (const e of s.fx) {
+      const a = s.t - e.t; if (a < 0 || a > .9) continue;
+      if (e.ty === 0 || e.ty === 1) { const [x, y] = toScreen(e.x, 2.6, e.z, v.cam); g.save(); g.translate(x, y - 20 - a * 40); g.globalAlpha = clamp((.9 - a) / .3, 0, 1); T(e.ty ? `-${e.d}!` : `-${e.d}`, 0, 0, e.ty ? 26 : 19, e.ty ? '#ffd23f' : '#fff', 'center', { lw: 5 }); g.restore(); }
+      else if (e.out) { const [x, y] = toScreen(e.x, 2.6, e.z, v.cam), sc = .6 + easeBack(clamp(a / .15, 0, 1)) * .6; g.save(); g.translate(x, y - 40 - a * 30); g.scale(sc, sc); g.globalAlpha = clamp((.9 - a) / .25, 0, 1); T('OUT!', 0, 0, 34, '#ff5c8a', 'center', { lw: 6 }); g.restore(); }
+    }
+    // the giant's HP bar, top centre (+ the clock beside it)
+    if (MS && MS.phase === 'intro') return; /* the intro card sits there */
+    const bw = 420, bx = W / 2 - bw / 2, by = 22, u = clamp(s.gh / s.gH, 0, 1), fl = G.hit < .2 ? 1 - G.hit / .2 : 0;
+    rr(bx - 4, by - 4, bw + 8, 34, 17); g.fillStyle = 'rgba(59,42,69,.85)'; g.fill();
+    rr(bx, by, bw, 26, 13); g.fillStyle = '#5b4a66'; g.fill();
+    if (u > 0) { rr(bx, by, Math.max(26, bw * u), 26, 13); g.fillStyle = u > .5 ? '#ff5c8a' : u > .25 ? '#ff8a1f' : '#ff4d4d'; g.fill(); if (fl) { g.globalAlpha = fl * .6; g.fillStyle = '#fff'; g.fill(); g.globalAlpha = 1; } }
+    g.lineWidth = 3; g.strokeStyle = INK; rr(bx, by, bw, 26, 13); g.stroke();
+    T(`👑 ${gp.name}`, bx + 14, by + 13, 15, '#fff', 'left', { lw: 4 });
+    T(`${s.gh} / ${s.gH}`, bx + bw - 14, by + 13, 15, '#fff', 'right', { lw: 4 });
+    if (MS && MS.phase !== 'intro') T(`⏱ ${Math.max(0, C.DUR - s.t).toFixed(0)}`, bx + bw + 48, by + 13, 22, '#fff', 'center', { lw: 5 });
+    if (s.t != null && C.DUR - s.t < 5 && s.t < C.DUR) T('Last few seconds!', W / 2, 78, 22, '#ff5c8a', 'center', { lw: 5 });
+  },
+};
+MGCARD.giant = { ic: 'crown', btn: 'move', ctl: 'move', goal: 'Pack: topple the giant before time runs out. Giant: knock out the whole pack.', press: 'Giant: Action = ground slam, Push = charge. The pack can hop the shockwave.', push: 'Pack: Action = bite (from behind = double), Push = hop.', score: 'Three hits and a pack pup is out. Giant wins at the time limit.', tip: 'Bite from behind · Hop the shockwave!',
+  rows: [['trophy', 'Goal', 'Pack: drain the giant HP bar. Giant: knock out the pack.', '#ff8a1f'], ['crown', 'Giant', 'Action = ground slam · Push = charge', '#ff5c8a'], ['paw', 'Pack', 'Action = bite (from behind = x2) · Push = hop the wave', '#3fa7ff'], ['star', 'Score', 'Three slam / charge hits and a pack pup is out.', '#7a4fc0']] };
 
 /* ===== Screens (DOM) ===== */
 function setScreen(name) {
@@ -10319,7 +10781,7 @@ function titleHTML() {
   <div class="card tmenu">
     <button class="btn pri big" data-do="go:setup">🎉 Start a party</button>
     <div class="two"><button class="btn ghost" data-do="go:help">📖 How to play</button><button class="btn ghost" data-do="go:play">🎮 Minigames</button></div>
-    ${NET.on ? '<button class="btn ghost" data-do="go:online">🌐 Online party (preview)</button>' : ''}
+    ${NET.on ? `<button class="btn ghost" data-do="go:online">🌐 Online party${SB_ON ? '' : ' (preview)'}</button>` : ''}
     ${soundBtns()}
   </div>
   <div class="tfoot">Every player needs just <b>one button</b>: a key, a gamepad button or a touch pad.</div></div>`;
@@ -10541,7 +11003,11 @@ for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) touchEl.a
    snapshots (every SNAP_EVERY s), one snapshot behind and interpolated by deepLerp. */
 const NET_Q = new URLSearchParams(location.search).get('online') || '';
 const NET_URL = ''; // relay v2 wss:// address once it exists; '?online=wss://...' overrides; '?online=local' = tabs of one browser
-const NET = { on: !!(NET_Q || NET_URL), mode: 'local', tr: null, me: null, code: '', status: '', lobby: null, seat: -1,
+// Supabase Realtime (SUPABASE.md): the project's URL + anon / publishable key. Both set = "Online party" on the title
+// for everyone (GitHub Pages; the claude.ai artifact sandbox blocks it). '?online=sb' forces it (tests use a fake client).
+const SB_URL = 'https://sprqmpzqijgvodulzwqy.supabase.co', SB_KEY = 'sb_publishable_T6_blAenbklTZzDwxgOTgA_UaAjuint'; // publishable key: meant to be public
+const SB_ON = !!(SB_URL && SB_KEY);
+const NET = { on: !!(NET_Q || NET_URL || SB_ON), mode: 'local', tr: null, me: null, code: '', status: '', lobby: null, seat: -1,
   rdown: {}, rlatch: {}, runi: {}, rax: {}, rla: {}, rlb: {}, myIn: '', inT: 0, lobbyMode: 'simple', uid: 0, sendT: 0, sentGame: false, snaps: [], arrive: 0, gap: .1, myDown: false, ptr: false, helloT: 0,
   name: 'Friend', pup: 'mochi', sig: '', pupSig: '' };
 const SNAP_EVERY = .1;
@@ -10585,9 +11051,180 @@ function wsTransport(url, code, host) {
   };
   return T;
 }
+/* Supabase Realtime Broadcast (free plan, no tables). Room channel `pawty:<CODE>`: the host's messages to everyone go
+   out ONCE there (Broadcast reaches every guest), guests ask to join there ({j: tok} -> {e: tok, why} if full).
+   Each guest also has its own channel `pawty:<CODE>:<tok>` (only it and the host join): its input goes up there and the
+   host's messages to it alone come down there, so one guest's input is never delivered to the others.
+   Presence: the host is 'host' on the room channel (no host = no party, host gone = closed); a guest is 'g' on its own
+   channel (a closed tab = a drop). The host hands out ids g1, g2, ... (never reused) and keeps the 5-guest limit.
+   Free plan: 100 events/s per project, one event = one message sent or one delivered. The room stays under SB.budget:
+   snapGap() lowers the snapshot rate with many guests, and guests batch their messages to the rate `r` the host
+   announces; the host replays a batch one button change per frame, so taps and mashes aren't lost. SB.tune = false = the
+   plain mapping (one channel, no batching), kept only to measure the difference. */
+const SB_LIB = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js';
+const SB = { budget: 80, down: { move: 48, one: 60 }, max: 5, tune: true, grace: 6 }; // grace: s a vanished Presence may come back (a network blip) before it counts as gone
+let sbLib = null;
+function sbLoad() {
+  if (window.supabase && window.supabase.createClient) return Promise.resolve(window.supabase);
+  return sbLib || (sbLib = new Promise((ok, no) => {
+    const el = document.createElement('script'); el.src = SB_LIB; el.crossOrigin = 'anonymous';
+    el.onload = () => window.supabase ? ok(window.supabase) : no(); el.onerror = () => { sbLib = null; no(); };
+    document.head.appendChild(el);
+  }));
+}
+function sbTransport(code, host) {
+  const T = { id: host ? 'host' : null }, tune = SB.tune, tok = Math.random().toString(36).slice(2, 10), at = Date.now();
+  let cl = null, room = null, dead = false, clock = 0;
+  const fail = why => { if (dead) return; T.close(true); if (T.onerr) T.onerr(why); };
+  const pub = (ch, p) => ch && !dead ? ch.send({ type: 'broadcast', event: 'm', payload: p }) : null;
+  const chan = (topic, key) => cl.channel(topic, { config: { broadcast: { self: false }, presence: { key } } });
+  const bad = st => st === 'CHANNEL_ERROR' || st === 'TIMED_OUT';
+  const NOSRV = 'Could not reach the party server.';
+  // host: guests by id { n, tok, ch, q (messages waiting for replay), prev (buttons last replayed), goneT }
+  const gs = {}; let nextId = 1, upRate = 30, opened = false, subAt = -1;
+  // guest: own channel, outgoing batch, rate from the host
+  let up = null, q = [], lastF = -1e9, rate = 10, me = 0, roomOk = false, upOk = false, seen = false, asked = false, noHostT = -1, askT = 0, reT = 0, hostGoneT = -1;
+  function open() { if (opened) return; opened = true; if (T.onopen) T.onopen(code); }
+  function hostStart() {
+    room = chan('pawty:' + code, 'host');
+    room.on('broadcast', { event: 'm' }, ({ payload: p }) => {
+      if (p.j) return hostJoin(p.j);
+      if (p.from != null && gs['g' + p.from]) hostRecv('g' + p.from, [p.m]);
+    });
+    // an older host on this code: take another code before anyone sees this one
+    room.on('presence', { event: 'sync' }, () => {
+      if (opened) return;
+      if ((room.presenceState().host || []).some(h => h.tok !== tok && h.at <= at)) { const old = room; room = null; cl.removeChannel(old); code = netCode(); subAt = -1; return hostStart(); }
+      open();
+    });
+    // after the first connect, errors are left to supabase-js (it rejoins by itself; SUBSCRIBED again re-tracks)
+    room.subscribe(st => { if (dead) return; if (st === 'SUBSCRIBED') { if (!opened) subAt = clock; room.track({ tok, at }); } else if (bad(st) && !opened) fail(NOSRV); });
+  }
+  function hostJoin(g) {
+    // asked again: our answer got lost (answer again), or our join of its channel never came up (start over, new id)
+    const hid = Object.keys(gs).find(k => gs[k].tok === g), had = hid && gs[hid];
+    if (had && had.up) return tune ? pub(had.ch, { ok: had.n }) : pub(room, { ok: g, you: had.n });
+    if (had) { delete gs[hid]; if (had.ch) cl.removeChannel(had.ch); }
+    if (Object.keys(gs).length >= SB.max) return pub(room, { e: g, why: 'That party is full.' });
+    const n = nextId++, id = 'g' + n, o = gs[id] = { n, tok: g, ch: null, q: [], prev: {}, goneT: -1, up: !tune };
+    if (!tune) { pub(room, { ok: g, you: n }); if (T.onpeer) T.onpeer(id, true); return; }
+    o.ch = chan('pawty:' + code + ':' + g, 'host');
+    o.ch.on('broadcast', { event: 'm' }, ({ payload: p }) => { if (p.l) hostRecv(id, p.l); });
+    // its Presence gone = a closed tab, unless it comes back within SB.grace (tick)
+    o.ch.on('presence', { event: 'leave' }, ({ key }) => { if (key === 'g' && o.goneT < 0) o.goneT = clock; });
+    o.ch.on('presence', { event: 'join' }, ({ key }) => { if (key === 'g') o.goneT = -1; });
+    o.ch.subscribe(st => { if (dead || gs[id] !== o || st !== 'SUBSCRIBED' || o.up) return; o.up = true; pub(o.ch, { ok: n }); if (T.onpeer) T.onpeer(id, true); });
+  }
+  function hostRecv(id, list) {
+    const o = gs[id];
+    for (const s of list) {
+      let m; try { m = JSON.parse(s, J_IN); } catch (e) { continue; }
+      if (m.t === 'bye') return hostDrop(id);
+      if (tune) o.q.push(m); else if (T.onmsg) T.onmsg(m, id);
+    }
+  }
+  function hostDrop(id) {
+    const o = gs[id]; if (!o) return;
+    delete gs[id]; if (o.ch) cl.removeChannel(o.ch);
+    if (T.onpeer) T.onpeer(id, false);
+  }
+  function guestStart() {
+    room = chan('pawty:' + code, 'g');
+    room.on('broadcast', { event: 'm' }, ({ payload: p }) => {
+      if (p.x) return closed();
+      if (p.e === tok) return fail(p.why);
+      if (p.ok === tok) return joined(p.you);
+      if (p.m == null || !me || (p.to != null && p.to !== me)) return;
+      if (p.r) rate = p.r;
+      if (T.onmsg) T.onmsg(JSON.parse(p.m, J_IN), 'host');
+    });
+    room.on('presence', { event: 'sync' }, () => {
+      if ((room.presenceState().host || []).length) { seen = true; hostGoneT = -1; ask(); }
+      else if (seen) { if (hostGoneT < 0) hostGoneT = clock; } else if (noHostT < 0) noHostT = clock;
+    });
+    room.subscribe(st => { if (dead) return; if (st === 'SUBSCRIBED') { roomOk = true; ask(); } else if (bad(st) && !me) fail(NOSRV); });
+    if (!tune) return;
+    up = chan('pawty:' + code + ':' + tok, 'g');
+    up.on('broadcast', { event: 'm' }, ({ payload: p }) => {
+      if (p.ok) return joined(p.ok);
+      if (p.m != null && me && T.onmsg) T.onmsg(JSON.parse(p.m, J_IN), 'host');
+    });
+    up.subscribe(st => { if (dead) return; if (st === 'SUBSCRIBED') { upOk = true; up.track({ at }); ask(); } else if (bad(st) && !me) fail(NOSRV); });
+  }
+  function ask() { if (asked || !roomOk || !seen || (tune && !upOk)) return; asked = true; askT = reT = clock; pub(room, { j: tok }); }
+  function joined(n) { if (me) return; me = n; T.id = 'g' + n; open(); }
+  function closed() { if (dead) return; const cb = T.onpeer; T.close(true); if (cb) cb('host', false); }
+  function flush() { if (!q.length) return; pub(up, { l: q.map(x => x.s) }); q = []; lastF = clock; }
+  // a whole number of batches a second: 3.2/s could put 4 into one second
+  const due = () => clock - lastF >= 1 / Math.max(1, Math.floor(rate));
+  T.send = (m, to) => {
+    if (dead) return;
+    const s = JSON.stringify(m, J_OUT);
+    if (host) {
+      if (!to || to === '*') return pub(room, tune ? { m: s, r: +upRate.toFixed(2) } : { m: s });
+      const o = gs[to]; if (o) { if (tune) pub(o.ch, { m: s }); else pub(room, { to: o.n, m: s }); }
+      return;
+    }
+    if (!me) return;
+    if (!tune) return pub(room, { from: me, m: s });
+    // input with the same buttons as the last one waiting only updates the stick: presses (edges) are all kept
+    const l = q[q.length - 1];
+    if (m.t === 'in' && l && l.m.t === 'in' && l.m.d === m.d && l.m.a === m.a && l.m.b === m.b) q[q.length - 1] = { m, s }; else q.push({ m, s });
+    if (m.t === 'hello' || due()) flush();
+  };
+  // called by netHostTick with the usual gap (1/10 s, 1/15 s in move games): fewer snapshots when many guests share the budget
+  T.snapGap = base => {
+    if (!tune) return base;
+    const G = Object.keys(gs).length, s = Math.min(1 / base, (base < .09 ? SB.down.move : SB.down.one) / (1 + G));
+    upRate = G ? Math.min(30, (SB.budget - (1 + G) * s) / (2 * G)) : 30;
+    return 1 / s;
+  };
+  T.tick = dt => {
+    if (dead) return;
+    clock += dt;
+    if (host) {
+      if (!opened && subAt >= 0 && clock - subAt > 3) open(); // no presence sync came: carry on
+      // replay each guest's batch in order, one button change per frame: the game samples buttons once a frame, so an up
+      // and the next down in the same frame would read as one long hold (a lost press)
+      for (const id in gs) {
+        const o = gs[id];
+        if (o.goneT >= 0 && clock - o.goneT > SB.grace) { hostDrop(id); continue; }
+        while (o.q.length && gs[id]) {
+          const m = o.q.shift(), p = o.prev; let edge = m.t === 'uni' || m.t === 'nav' || m.t === 'pick';
+          if (m.t === 'in' || m.t === 'btn') { edge = !!m.d !== !!p.d || !!m.a !== !!p.a || !!m.b !== !!p.b; o.prev = { d: m.d, a: m.a, b: m.b }; }
+          if (T.onmsg) T.onmsg(m, id);
+          if (edge) break;
+        }
+      }
+      return;
+    }
+    if (hostGoneT >= 0 && clock - hostGoneT > SB.grace) return closed();
+    if (!me && !seen && noHostT >= 0 && clock - noHostT > 2.5) return fail('No party with that code.');
+    if (!me && asked && clock - askT > 8) return fail(NOSRV);
+    if (!me && asked && clock - reT > 2) { reT = clock; pub(room, { j: tok }); } // Broadcast is at-most-once: ask again
+    if (q.length && due()) flush();
+  };
+  T.close = quiet => {
+    if (dead) return;
+    let bye = null;
+    if (!quiet) { if (host) bye = pub(room, { x: 1 }); else if (me) { if (tune) { flush(); bye = pub(up, { l: ['{"t":"bye"}'] }); } else bye = pub(room, { from: me, m: '{"t":"bye"}' }); } }
+    dead = true;
+    const c = cl, end = () => { try { if (c) { c.removeAllChannels(); if (c.realtime) c.realtime.disconnect(); } } catch (e) {} };
+    Promise.resolve(bye).then(end, end); // the goodbye goes out first
+  };
+  sbLoad().then(lib => {
+    if (dead) return;
+    if (!SB_ON && !lib.__fake) return fail('Online play isn\'t set up yet.');
+    cl = lib.createClient(SB_URL || 'https://fake.supabase.co', SB_KEY || 'fake', { auth: { persistSession: false, autoRefreshToken: false }, realtime: { params: { eventsPerSecond: 60 } } });
+    host ? hostStart() : guestStart();
+  }, () => fail(NOSRV));
+  return T;
+}
 function netTransport(code, host) {
-  const url = /^wss?:/.test(NET_Q) ? NET_Q : NET_URL;
-  return url && NET_Q !== 'local' ? wsTransport(url, code, host) : localTransport(code, host);
+  if (NET_Q === 'local') return localTransport(code, host);
+  if (/^wss?:/.test(NET_Q)) return wsTransport(NET_Q, code, host);
+  if (NET_Q === 'sb' || SB_ON) return sbTransport(code, host);
+  return NET_URL ? wsTransport(NET_URL, code, host) : localTransport(code, host);
 }
 function netHost() {
   netLeave(true);
@@ -10644,10 +11281,12 @@ function netSnap(lite) {
 }
 function netHostTick(dt) {
   if (!NET.tr) return;
+  if (NET.tr.tick) NET.tr.tick(dt);
   const live = !!(B || MS);
   if (!live) { if (NET.sentGame) { NET.sentGame = false; netSend({ t: 'snap', s: { screen: SCREEN, PL: [], props: [] } }); netLobby(); } return; }
   // move games send 15 snapshots a second (one-button games and the board 10)
-  NET.sendT += dt; if (NET.sendT < (MS && MS.def.move && MS.phase !== 'ranks' ? 1 / 15 : SNAP_EVERY)) return;
+  const gap = MS && MS.def.move && MS.phase !== 'ranks' ? 1 / 15 : SNAP_EVERY;
+  NET.sendT += dt; if (NET.sendT < (NET.tr.snapGap ? NET.tr.snapGap(gap) : gap)) return;
   NET.sendT = 0; NET.sentGame = true;
   NET.snapN = ((NET.snapN || 0) + 1) % 5;
   netSend({ t: 'snap', s: netSnap(!!(MS && MS.def.move && MS.phase !== 'ranks' && NET.snapN)) });
@@ -10685,6 +11324,7 @@ function deepLerp(a, b, k) {
   return b;
 }
 function netClientTick(dt) {
+  if (NET.tr && NET.tr.tick) NET.tr.tick(dt);
   if (NET.status === 'Looking for the party…' && (NET.helloT += dt) > 6) return netLeave(false, `No party found with the code ${NET.code}.`);
   const key = CFG.slots[0].key;
   // a guest is alone at its screen: WASD + F/G and arrows + K/L both work, plus the first gamepad and the touch stick
@@ -10754,7 +11394,7 @@ function onlineHTML() {
       <div class="row"><button class="btn ghost" data-do="nleave">Leave</button></div></div>`;
   }
   return `<div class="card title"><h1 class="ph">Online party</h1>
-    <p>Preview: play with friends on their own screens. One person hosts, everyone else joins with the room code.</p>${err}
+    <p>${SB_ON ? 'Play' : 'Preview: play'} with friends on their own screens. One person hosts, everyone else joins with the room code.</p>${err}
     <div class="col"><button class="btn" data-do="nhost">🏠 Host a party</button></div>
     <div class="njoin"><input id="netCode" maxlength="4" placeholder="CODE" autocomplete="off" value="${NET.mode === 'local' && NET.code ? NET.code : ''}">
       <input id="netName" maxlength="14" placeholder="Your name" value="${NET.name}">
@@ -12208,7 +12848,7 @@ if (document.fonts && document.fonts.load) {
 } else boot();
 
 // Debug / test hooks
-window.__P = { update, draw, startMG, newGame, setScreen, get B() { return B; }, get MS() { return MS; }, get PL() { return PL; }, get SCREEN() { return SCREEN; }, CFG, MGDEF, PROPS, BS, NET, ACT, SP, CAMU, PREV, CORNER, MAPS, MLOOP, MAPB, setMap, forkInfo, get MAP() { return MAP; }, fn: { hiddenBlock, raccoon, pawWheel, startCatchup, roundMode, ask, doKennel, doShop, stepMove }, ICON, netHost, netJoin, netLeave, deepLerp, netSnap, netApply,
+window.__P = { update, draw, startMG, newGame, setScreen, get B() { return B; }, get MS() { return MS; }, get PL() { return PL; }, get SCREEN() { return SCREEN; }, CFG, MGDEF, PROPS, BS, NET, ACT, SP, CAMU, PREV, CORNER, MAPS, MLOOP, MAPB, setMap, forkInfo, get MAP() { return MAP; }, fn: { hiddenBlock, raccoon, pawWheel, startCatchup, roundMode, ask, doKennel, doShop, stepMove }, ICON, netHost, netJoin, netLeave, deepLerp, sbTransport, SB, netSnap, netApply,
   /* Action mode */ act: { PIN, KD, KL, TS, KEYSETS, MGCARD, MVLV, PMV, ACTG, pmStep, makePlayers, nextMG, mgInMode, mgCtl, devAx, J_OUT } };
 </script>
 </body>
