@@ -2977,6 +2977,12 @@ function buildBoard3D() {
       gp.add(artPart('Catcher'));
       const tx = ART.tex; /* Tripo pickup: siren on the cab roof (.28, 2.31, 0; top 2.42), body 2.19 wide (z +-1.09) */
       A.siren = ['#ff3b3b', '#3b7bff'].map((c, k) => M(GEO.box, new THREE.MeshToonMaterial({ color: c, gradientMap: GRAD, emissive: new THREE.Color(0) }), tx ? .1 + k * .35 : -.55 + k * .4, tx ? 2.36 : 1.84, 0, ag, tx ? .32 : .36, .2, tx ? .32 : .36));
+      if (tx) { /* Tripo light bar runs across the cab (z): red lamps at both ends, blue in the middle (probed from the atlas); caps sit just over them and blink */
+        const [r, b] = A.siren; r.material.color.set('#7a1418'); b.material.color.set('#16357a'); /* dim when off so the blink reads */
+        for (const m of A.siren) { m.geometry = GEO.sph; m.castShadow = false; }
+        r.position.set(.27, 2.35, -.5); r.scale.set(.13, .075, .08); b.position.set(.27, 2.35, -.06); b.scale.set(.12, .085, .14);
+        M(GEO.sph, r.material, .27, 2.35, .48, ag, .13, .075, .08).castShadow = false;
+      }
       const sz = tx ? 1.12 : .74; sign(gp, 'DOG CATCHER', '#ff5c5c', -.35, 1.15, sz, 2.2, .44); sign(gp, 'DOG CATCHER', '#ff5c5c', -.35, 1.15, -sz, 2.2, .44, Math.PI);
       return;
     }
