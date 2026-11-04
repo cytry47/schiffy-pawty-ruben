@@ -1782,10 +1782,12 @@ function lmPts(f, x, z, ry, s) {
 }
 function lmPlace(MD, segs, bld, placed) {
   const defs = LM.lib && LMDEF[MAP], out = []; BS.lmInfo = []; if (!defs) return out;
-  const L = MAP_L, tx = MAPB.cx, tz = MAPB.cz + 60; /* front faces this point: the board side + the cameras south of it */
+  /* facing (Ruben 2026-11-04): default = the nearest point on any link (the closest lane); ?lmface=centre = the island centre, ?lmface=cam = the old aim at a point south (the cameras) */
+  const FACE = (location.search.match(/[?&]lmface=(cam|centre)\b/) || [])[1] || 'lane', L = MAP_L, tx = MAPB.cx, tz = FACE === 'cam' ? MAPB.cz + 60 : MAPB.cz;
+  const lane = (ax, az) => { let bx = tx, bz = tz, bd = 1e9; for (const [a, b] of segs) { const dx = b.x - a.x, dz = b.z - a.z, t = clamp(((ax - a.x) * dx + (az - a.z) * dz) / (dx * dx + dz * dz || 1), 0, 1), px = a.x + dx * t, pz = a.z + dz * t, d = Math.hypot(px - ax, pz - az); if (d < bd) { bd = d; bx = px; bz = pz; } } return Math.atan2(bx - ax, bz - az); };
   for (const e of defs) {
     const f = lmFoot(e); if (!f) { BS.lmInfo.push({ id: e.id, skip: 'no model' }); continue; }
-    const [ax, az] = e.at, [bw, bd] = e.box, ry = e.ry != null ? e.ry : Math.atan2(tx - ax, tz - az), R = Math.hypot(bw, bd) / 2 + 9;
+    const [ax, az] = e.at, [bw, bd] = e.box, ry = e.ry != null ? e.ry : FACE === 'lane' ? lane(ax, az) : Math.atan2(tx - ax, tz - az), R = Math.hypot(bw, bd) / 2 + 9;
     const sp = SP.filter(p => Math.hypot(p.x - ax, p.z - az) < R + 6), sg = segs.filter(([a, b]) => Math.min(Math.hypot(a.x - ax, a.z - az), Math.hypot(b.x - ax, b.z - az)) < R + 12);
     const bl = bld.filter(([x, z, r]) => Math.hypot(x - ax, z - az) < R + r), pl = placed.filter(([x, z, r]) => Math.hypot(x - ax, z - az) < R + r);
     const cam = SP.filter(p => Math.abs(p.x - ax) < R + 2 && p.z < az + R);
