@@ -9005,24 +9005,30 @@ MGDEF.paint = {
     if (s.t != null && C.DUR - s.t < 5 && s.t < C.DUR) T('Last few seconds!', W / 2, 108, 22, '#ff5c8a', 'center', { lw: 5 });
   },
 };
-/* --- A6. Sinking Tiles (new, FFA): two floors of hex tiles in the sky. A tile you step on cracks and drops SINK.drop s
-   later. Fall through the top floor = land on the lower one; fall through the lower floor = out. A = hop (a pup in the
-   air doesn't crack tiles), B = shove. Last pup standing wins (then reverse order of falling out, same frame = tie).
-   State: s.tz[floor] = flat tile arrays (0 = solid, else the s.t it drops at; gone once s.t passes it), s.ly = each
-   pup's floor (0 top, 1 lower), s.outAt = when it fell out. The lower floor is one ring wider, so it shows round the top. --- */
+/* --- A6. Sinking Tiles (new, FFA; double-layer tiles since 2026-11-04): ONE floor of hex tiles in the sky, each tile a
+   stack of two slabs (top surface y 0, lower surface SINK.LO). Step on a fresh tile: its top slab cracks and drops
+   SINK.drop s later, the pup steps down onto the lower slab (no fall). The lower slab cracks as soon as a pup stands on
+   it and drops SINK.dropLo s later; only then is the tile a hole: a pup over it falls and is out. A = hop (a pup in the
+   air doesn't crack tiles), B = shove. Last pup standing wins (then reverse order of falling out, same frame = tie); at
+   the cap survivors by layers under them (top slab above lower slab), then tie.
+   State: s.tz[0] / s.tz[1] = top / lower layer of every tile (flat arrays: 0 = solid, else the s.t it drops at; gone once
+   s.t passes it), s.ly = the layer each pup last stood on (0 top, 1 lower), s.outAt = when it fell out. --- */
 const SINK = {
   A: .7,         // GUESS hex tile radius (centre to corner), world units (a pup about fills one tile)
-  RINGS: [5, 5, 5, 6, 6, 7, 7], // GUESS hex rings of the top floor by pup count (index = n): 91 / 127 / 169 tiles; lower floor +1 ring
-  Y1: -3.6,      // GUESS lower floor height (top floor = 0)
-  drop: .9,      // GUESS seconds from the first touch to the drop (.6 ended 4-pup bot games in ~15 s)
-  dropFast: .55, // GUESS drop delay once the floor crumbles faster
+  RINGS: [5, 5, 5, 6, 6, 7, 7], // GUESS hex rings by pup count (index = n): 91 / 127 / 169 tiles, 2 layers each
+  LO: -.5,       // GUESS lower slab's surface height (top = 0): a small step down that reads at the game camera
+  drop: .9,      // GUESS seconds from the first touch of a top slab to its drop (.6 ended 4-pup bot games in ~15 s)
+  dropLo: 1.1,   // GUESS same for the lower slab (standing still: ~2 x drop from first touch to falling out)
+  dropFast: .55, // GUESS drop delay (both layers) once the floor crumbles faster
   fastT: 25,     // GUESS play seconds before the speed-up + edge crumble
-  ringT: 3,      // GUESS seconds between edge rings crumbling (after fastT)
+  ringT: 3,      // GUESS seconds between edge rings crumbling (after fastT; whole stacks)
   ringWarn: 1.2, // GUESS crack warning before an edge ring drops
-  DUR: 60,       // GUESS hard cap: survivors tie (top floor above lower floor)
+  DUR: 60,       // GUESS hard cap: survivors by layers under them (top slab above lower slab), then tie
   hopV: 6.2,     // GUESS hop launch speed (about .56 s in the air, ~2.9 units at top speed)
   G: 22,         // GUESS gravity
   hopCd: .25,    // GUESS hop cooldown after landing
+  lip: .2,       // GUESS a pup in a hole that hasn't fallen more than this below the lower slabs still catches a neighbour's side and climbs out (a slightly short hop counts)
+  climb: 7,      // GUESS step-up speed from a lower slab onto an intact top slab (units / s)
   pace: .55,     // GUESS bot stick scale on fresh ground (walking leaves each tile just before it drops)
 };
 // hex grid per ring count (pure geometry, cached, never in state): cells [q, r, x, z, ring], idx 'q,r' -> index
@@ -9043,122 +9049,132 @@ function sinkCell(G, x, z) {
 }
 MGDEF.sink = {
   name: 'Sinking Tiles', kind: 'Action · Last pup standing', move: true,
-  how: "Tiles crack and drop a moment after you step on them. Fall through the top floor and you land on the lower one; fall through that one and you are out. Action = hop (pups in the air don't crack tiles). Shove the others into the holes! Last pup standing wins.",
+  how: "Every tile has two layers. Step on one and its top cracks and drops a moment later: you land on the lower layer. That one cracks as soon as you stand on it, and when it drops too there's a hole: fall through and you are out. Action = hop (pups in the air don't crack tiles). Shove the others into the holes! Last pup standing wins.",
   init(ps) {
-    const N = SINK.RINGS[ps.length] || 5, G0 = sinkGrid(N), G1 = sinkGrid(N + 1);
-    return { ps, n: ps.length, t: 0, N, pm: pmRing(ps.length, Math.min(3.4, G0.R * .5)), bk: ps.map(() => ({ t: 0, c: -1, cl: 0, hopOK: false, ah: 0, bh: 0 })), hs: 0, tz: [G0.cells.map(() => 0), G1.cells.map(() => 0)], ly: ps.map(() => 0), outAt: ps.map(() => Infinity), hc: ps.map(() => 0), ring: N + 1, rt: 0, go: 0 };
+    const N = SINK.RINGS[ps.length] || 5, G = sinkGrid(N);
+    return { ps, n: ps.length, t: 0, N, pm: pmRing(ps.length, Math.min(3.4, G.R * .5)), bk: ps.map(() => ({ t: 0, c: -1, hopOK: false, ah: 0, bh: 0 })), hs: 0, tz: [G.cells.map(() => 0), G.cells.map(() => 0)], ly: ps.map(() => 0), outAt: ps.map(() => Infinity), hc: ps.map(() => 0), ring: N + 1, rt: 0, go: 0 };
   },
-  G: (s, L) => sinkGrid(s.N + L),
-  Y: L => L ? SINK.Y1 : 0,
-  // stand on it: solid, or still cracking
+  G: s => sinkGrid(s.N),
+  LO: SINK.LO,
+  // layer L of tile i still there (solid, or still cracking)
   ok(s, L, i) { const d = i < 0 ? -1 : s.tz[L][i]; return d === 0 || d > 0 && s.t < d; },
-  // bots: still there in `ta` seconds
-  okIn(s, L, i, ta) { const d = i < 0 ? -1 : s.tz[L][i]; return d === 0 || d > 0 && d - s.t > ta; },
-  // PupMover per floor (pups on different floors never bump); hit-stop shared
-  step(s, I, dt) {
-    const outs = s.pm.map(p => p.out), hs0 = s.hs, ev = { hits: [], touch: [] }; let hs = 0;
-    for (const L of [0, 1]) {
-      if (!s.pm.some((p, k) => !outs[k] && s.ly[k] === L)) continue;
-      s.pm.forEach((p, k) => { p.out = outs[k] || s.ly[k] !== L; });
-      s.hs = hs0; const e = pmStep(s, I, dt, {}); hs = Math.max(hs, s.hs);
-      ev.hits.push(...e.hits); ev.touch.push(...e.touch);
-    }
-    s.pm.forEach((p, k) => { p.out = outs[k]; }); s.hs = hs;
-    return ev;
-  },
-  // hops, gravity, cracking the tile you stand on, falling through a floor; returns the pups that fell out
+  // ground height on tile i: 0 (top slab), LO (lower slab) or null (hole / off the floor)
+  gh(s, i) { return i < 0 ? null : this.ok(s, 0, i) ? 0 : this.ok(s, 1, i) ? SINK.LO : null; },
+  // bots: tile i still has ground in `ta` seconds (an untouched lower slab under a cracking top counts)
+  okIn(s, i, ta) { if (i < 0) return false; const t = s.t + ta, a = s.tz[0][i], b = s.tz[1][i]; return a === 0 || t < a || b === 0 || t < b; },
+  // hops, gravity, steps between layers, cracking the layer you stand on, falling out; returns the pups that fell out
   vert(s, I, dt) {
-    const C = SINK, fell = [], delay = s.t > C.fastT ? C.dropFast : C.drop;
+    const C = SINK, G = this.G(s), fell = [], fast = s.t > C.fastT;
+    const crack = (L, i) => { if (s.tz[L][i] === 0) s.tz[L][i] = +(s.t + (fast ? C.dropFast : L ? C.dropLo : C.drop)).toFixed(2); };
     s.pm.forEach((p, k) => {
       if (p.out) return;
       s.hc[k] = Math.max(0, s.hc[k] - dt);
-      const L = s.ly[k], i = sinkCell(this.G(s, L), p.x, p.z);
-      if (p.vy === 0 && Math.abs(p.y - this.Y(L)) < 1e-3) {
-        if (!this.ok(s, L, i)) p.vy = -.01; // the tile dropped (or off the edge): start falling
-        else if ((I[k] || NOIN).ap && !s.hc[k] && !p.st && !p.lg) { p.vy = C.hopV; s.hc[k] = C.hopCd + .6; }
-        else { if (s.tz[L][i] === 0) s.tz[L][i] = +(s.t + delay).toFixed(2); return; }
+      const i = sinkCell(G, p.x, p.z), g = this.gh(s, i);
+      if (p.vy === 0) {
+        if (g == null || g < p.y - 1e-3) p.vy = -.01; // hole / off the edge, or the top slab dropped: step down / fall
+        else {
+          if (g > p.y) p.y = Math.min(g, p.y + C.climb * dt); // walked onto an intact top slab: step up
+          const L = g ? 1 : 0; s.ly[k] = L;
+          if ((I[k] || NOIN).ap && !s.hc[k] && !p.st && !p.lg) { p.vy = C.hopV; s.hc[k] = C.hopCd + .6; }
+          else { crack(L, i); return; }
+        }
       }
       const y0 = p.y; p.vy -= C.G * dt; p.y += p.vy * dt;
-      if (L === 0 && p.y < -.45) s.ly[k] = 1; // passed the top floor
-      const L2 = s.ly[k], Y2 = this.Y(L2), j = sinkCell(this.G(s, L2), p.x, p.z);
-      if (p.vy < 0 && y0 >= Y2 && p.y <= Y2 && this.ok(s, L2, j)) {
-        p.y = Y2; p.vy = 0; s.hc[k] = Math.min(s.hc[k], C.hopCd);
-        if (s.tz[L2][j] === 0) s.tz[L2][j] = +(s.t + delay).toFixed(2);
-      } else if (L2 === 1 && p.y < C.Y1 - .5) { p.out = true; p.st = 0; p.lg = 0; fell.push(k); }
+      const j = sinkCell(G, p.x, p.z), g2 = this.gh(s, j);
+      if (p.vy < 0 && g2 != null && p.y <= g2 && (y0 >= g2 - 1e-3 || p.y > C.LO - C.lip)) { /* lands, or (not yet below a lower slab's lip) catches the side of the stack it drifted onto and climbs it */
+        if (y0 >= g2 - 1e-3 || g2 === C.LO) p.y = g2; p.vy = 0; s.hc[k] = Math.min(s.hc[k], C.hopCd);
+        const L = g2 ? 1 : 0; s.ly[k] = L; crack(L, j);
+      } else if (p.y < C.LO - .5) { p.out = true; p.st = 0; p.lg = 0; fell.push(k); }
     });
     return fell;
   },
-  practice(s, dt, I) { pmStep(s, I, dt, { R: this.G(s, 0).R - .4, edge: 'wall' }); },
+  practice(s, dt, I) { pmStep(s, I, dt, { R: this.G(s).R - .4, edge: 'wall' }); },
   update(s, dt, I) {
     const C = SINK;
     if (!s.go) { s.go = 1; s.ly.fill(0); s.hc.fill(0); }
     s.t += dt;
-    this.step(s, I, dt);
+    pmStep(s, I, dt, {});
     this.vert(s, I, dt).forEach(k => { s.outAt[k] = s.t; });
-    // after fastT: tiles drop sooner and the edge crumbles one ring at a time (both floors, with a crack warning)
+    // after fastT: tiles drop sooner and the edge crumbles one ring at a time (whole stacks, with a crack warning)
     if (s.t > C.fastT && s.t - s.rt >= C.ringT && s.ring > 1) {
-      s.rt = s.t; s.ring--; const w = +(s.t + C.ringWarn).toFixed(2);
-      for (const L of [0, 1]) this.G(s, L).cells.forEach((c, i) => { if (c[4] >= s.ring + L && s.tz[L][i] === 0) s.tz[L][i] = w; });
+      s.rt = s.t; s.ring--; const w = +(s.t + C.ringWarn).toFixed(2), G = this.G(s);
+      G.cells.forEach((c, i) => { if (c[4] >= s.ring) for (const L of [0, 1]) { const d = s.tz[L][i]; if (d === 0 || d > w) s.tz[L][i] = w; } });
     }
-    if (s.pm.filter(p => !p.out).length <= 1 || s.t >= C.DUR) { s.rank = rankScores(s.pm.map((p, k) => p.out ? s.outAt[k] : s.ly[k] ? 1e8 : 1e9)); s.done = true; }
+    if (s.pm.filter(p => !p.out).length <= 1 || s.t >= C.DUR) {
+      const G = this.G(s);
+      s.rank = rankScores(s.pm.map((p, k) => { if (p.out) return s.outAt[k]; const g = this.gh(s, sinkCell(G, p.x, p.z)); return g === 0 ? 1e9 : g != null ? 1e8 : 1e7; }));
+      s.done = true;
+    }
   },
   anim(s, dt) { s.pm.forEach(p => { if (p.out && p.y > -16) { p.vy -= SINK.G * dt; p.y += p.vy * dt; } }); },
-  /* bot: walks tile to tile. On reaching a tile it picks the next one among the 6 neighbours (fresh first, room to keep
-     walking, away from rivals and the rim, roughly straight on; a hop over a hole to a tile 2 away when its plan allows),
-     pace = just fast enough that each tile is left before it drops. Every reaction time: shove a rival standing in front of
-     a hole when the lunge (+ its slide) stays on solid tiles. MVLV: spd stick, look = lookahead / hops / less noise,
-     aim = blunder chance, shv = shove chance. */
+  /* bot: walks tile to tile. On reaching a tile it picks the next one among the 6 neighbours (fresh top slabs first,
+     then fresh lower slabs, never a cracked lower slab unless nothing else is left; room to keep walking, away from rivals
+     and the rim, roughly straight on; a hop over a hole to a tile 2 away when its plan allows), pace = just fast enough
+     that each tile is left before it drops. Every reaction time: shove a rival standing in front of a hole when the lunge
+     (+ its slide) stays on solid tiles. MVLV: spd stick, look = lookahead / hops / less noise, aim = blunder chance,
+     shv = shove chance. */
   NB: [[1, 0], [1, -1], [0, -1], [-1, 0], [-1, 1], [0, 1]],
+  // what a tile is worth to walk on: fresh top 1, cracking top (lower still fresh) .45, fresh lower .5, else 0
+  hp(s, i) { if (i == null || i < 0) return 0; const a = s.tz[0][i], b = s.tz[1][i]; return a === 0 ? 1 : b !== 0 ? 0 : s.t < a ? .45 : .5; },
+  // tile worth reachable from tile n over tiles with ground for another second (breadth-first, capped), never through `skip`
+  reach(s, G, n, skip, cap = 40) {
+    const seen = { [n]: 1, [skip]: 1 }, Q = [n]; let w = 0;
+    for (let h = 0; h < Q.length && h < cap; h++) { const i = Q[h]; w += this.hp(s, i); const [q, r] = G.cells[i];
+      for (const [dq, dr] of this.NB) { const j = G.idx[(q + dq) + ',' + (r + dr)]; if (j != null && !seen[j] && this.okIn(s, j, 1)) { seen[j] = 1; Q.push(j); } } }
+    return w;
+  },
   pick(s, k, L) {
-    const C = SINK, p = s.pm[k], b = s.bk[k], Ly = s.ly[k], G = this.G(s, Ly), tz = s.tz[Ly];
+    const C = SINK, p = s.pm[k], b = s.bk[k], G = this.G(s);
     let here = sinkCell(G, p.x, p.z);
     if (here < 0) { let bd = 1e9; G.cells.forEach((c, i) => { const d = Math.hypot(c[2] - p.x, c[3] - p.z); if (d < bd) { bd = d; here = i; } }); }
     const [q0, r0] = G.cells[here], hx = Math.cos(p.f), hz = Math.sin(p.f), hop = Math.random() < .1 + L.look * .7;
-    const fresh = n => n != null && tz[n] === 0, nbF = n => { const [q, r] = G.cells[n]; let c = 0; for (const [dq, dr] of this.NB) if (fresh(G.idx[(q + dq) + ',' + (r + dr)])) c++; return c; };
+    const nbF = n => { const [q, r] = G.cells[n]; let c = 0; for (const [dq, dr] of this.NB) c += this.hp(s, G.idx[(q + dq) + ',' + (r + dr)]); return c; };
     let best = -1, bu = -1e9, bj = false;
     const blunder = Math.random() < L.aim * .1;
     for (const [dq, dr] of this.NB) for (const j of hop ? [1, 2] : [1]) {
       const n = G.idx[(q0 + dq * j) + ',' + (r0 + dr * j)]; if (n == null) continue;
       const near = G.idx[(q0 + dq) + ',' + (r0 + dr)];
-      if (j === 2 && this.okIn(s, Ly, near, .7)) continue; // only hop over a hole (or a tile about to go)
-      if (!this.okIn(s, Ly, n, .5)) continue;
-      const [, , x, z, rg] = G.cells[n], dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1;
-      let u = (fresh(n) ? 3 : 0) + nbF(n) * (.35 + L.look * .35) - rg / G.N * 1.6 + (dx * hx + dz * hz) / d * .5 - (j === 2 ? 1.5 : 0);
-      s.pm.forEach((o, jj) => { if (jj === k || o.out || s.ly[jj] !== Ly) return; const e = Math.hypot(o.x - x, o.z - z); if (e < 1.8) u -= (1.8 - e) * 1.2; });
-      // sharper pups head for the biggest fresh patch (fresh tiles within ~3 tiles)
-      if (L.look > .3) { let f3 = 0; G.cells.forEach((c, i) => { if (tz[i] === 0 && Math.abs(c[2] - x) < 3.7 && Math.abs(c[3] - z) < 3.7) f3++; }); u += f3 * .25 * L.look * L.look; }
+      if (j === 2 && this.okIn(s, near, .7)) continue; // only hop over a hole (or a tile about to go)
+      if (!this.okIn(s, n, .25 + L.look * .5)) continue; /* duller pups cut it finer */
+      const [, , x, z, rg] = G.cells[n], dx = x - p.x, dz = z - p.z, d = Math.hypot(dx, dz) || 1, h = this.hp(s, n) || (Math.random() < (1 - L.look) * .6 ? .5 : 0); /* duller pups often miss that a lower slab is already cracked */
+      let u = h * 3 - (h ? 0 : 3 * L.look) + nbF(n) * (.35 + L.look * .35) - rg / G.N * 1.6 + (dx * hx + dz * hz) / d * .5 - (j === 2 ? 1.5 : 0);
+      s.pm.forEach((o, jj) => { if (jj === k || o.out) return; const e = Math.hypot(o.x - x, o.z - z); if (e < 1.8) u -= (1.8 - e) * 1.2; });
+      // sharper pups head for the biggest patch they can still walk to (tile worth connected to it, not through here): on
+      // 2-layer tiles most pups go out trapped on a shrinking island, so the size of the island is what counts
+      if (L.look > .3) u += this.reach(s, G, n, here) * .1 * L.look * L.look;
       u += blunder ? rand(0, 9) : rand(0, .2 + (1 - L.look) * 1.8);
       if (u > bu) { bu = u; best = n; bj = j === 2; }
     }
-    b.c = best; b.cl = Ly; b.hopOK = bj;
+    b.c = best; b.hopOK = bj;
   },
   bot(s, k, dt) {
-    const C = SINK, p = s.pm[k], b = s.bk[k], pl = s.ps[k], L = mvLv(pl), Ly = s.ly[k], G = this.G(s, Ly);
+    const C = SINK, p = s.pm[k], b = s.bk[k], pl = s.ps[k], L = mvLv(pl), G = this.G(s);
     if (p.out) return AX0;
     const o = { mx: 0, my: 0, a: false, b: false };
     if (b.ah) b.ah = 0; else if (b.bh) b.bh = 0;
-    const here = sinkCell(G, p.x, p.z), left = here >= 0 && s.tz[Ly][here] > 0 ? s.tz[Ly][here] - s.t : 9, ground = p.vy === 0;
+    // time left on the layer I stand on (a cracked lower slab is the urgent one)
+    const here = sinkCell(G, p.x, p.z), Ly = here >= 0 && this.ok(s, 0, here) ? 0 : 1, dh = here >= 0 ? s.tz[Ly][here] : 0, left = dh > 0 ? dh - s.t + (Ly ? 0 : .4) : 9, ground = p.vy === 0;
     // reaction-time tick: maybe shove a rival that has a hole behind it
     b.t -= dt;
     if (b.t <= 0 && ground) {
       b.t = botRT(pl) * .75;
-      const j = pmNear(s, k, p.x, p.z, (q, jj) => s.ly[jj] === Ly && q.vy === 0 && q.ns <= 0);
+      const j = pmNear(s, k, p.x, p.z, q => q.vy === 0 && q.ns <= 0);
       if (j >= 0 && !p.cd && !p.st && !p.lg && Math.random() < L.shv * .7) {
         const q = s.pm[j], dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz) || 1, ux = dx / d, uz = dz / d;
-        if (d < 1.9 && !this.okIn(s, Ly, sinkCell(G, q.x + ux * 1.7, q.z + uz * 1.7), .3) && [.7, 1.4, 2.1, 2.8, 3.5, 4.2].every(e => this.okIn(s, Ly, sinkCell(G, p.x + ux * e, p.z + uz * e), .8))) {
+        if (d < 1.9 && !this.okIn(s, sinkCell(G, q.x + ux * 1.7, q.z + uz * 1.7), .3) && [.7, 1.4, 2.1, 2.8, 3.5, 4.2].every(e => this.okIn(s, sinkCell(G, p.x + ux * e, p.z + uz * e), .8))) {
           const ea = gauss() * L.aim * .12; o.mx = Math.cos(Math.atan2(uz, ux) + ea); o.my = Math.sin(Math.atan2(uz, ux) + ea); o.b = true; b.bh = 1; return o;
         }
       }
     }
-    // next tile: on arrival, or when the target went bad / I changed floors
-    const tc = b.c >= 0 && b.cl === Ly ? G.cells[b.c] : null;
-    if (ground && (!tc || Math.hypot(tc[2] - p.x, tc[3] - p.z) < .32 || !this.okIn(s, Ly, b.c, (b.hopOK ? .3 : 0) + .1 + L.look * .3))) this.pick(s, k, L); /* sharper pups see a target tile go bad sooner */
+    // next tile: on arrival, or when the target went bad (sharper pups see it go bad sooner)
+    const tc = b.c >= 0 ? G.cells[b.c] : null;
+    if (ground && (!tc || Math.hypot(tc[2] - p.x, tc[3] - p.z) < .32 || !this.okIn(s, b.c, (b.hopOK ? .3 : 0) + .1 + L.look * .3))) this.pick(s, k, L);
     const t2 = b.c >= 0 ? G.cells[b.c] : null;
     if (!t2) return o;
     const dx = t2[2] - p.x, dz = t2[3] - p.z, d = Math.hypot(dx, dz) || 1, sp = (left < .25 + L.look * .3 || b.hopOK ? L.spd : C.pace + (1 - L.look) * .25) * Math.min(1, d / .5 + .35); /* pacing is the same for every level, top speed isn't */
     o.mx = dx / d * sp; o.my = dz / d * sp;
     // hop: the target is 2 tiles out and the tile in between is a hole (take off once moving)
-    if (b.hopOK && ground && !s.hc[k] && !p.st && !p.lg && !b.ah && d < 2.9 && d > 1.6 && Math.hypot(p.vx, p.vz) > 2.5 && !this.okIn(s, Ly, sinkCell(G, p.x + dx / d * .8, p.z + dz / d * .8), .3)) { o.a = true; b.ah = 1; }
+    if (b.hopOK && ground && !s.hc[k] && !p.st && !p.lg && !b.ah && d < 2.9 && d > 1.6 && Math.hypot(p.vx, p.vz) > 2.5 && !this.okIn(s, sinkCell(G, p.x + dx / d * .8, p.z + dz / d * .8), .3)) { o.a = true; b.ah = 1; }
     return o;
   },
   score(s, k) { return !s.pm[k].out ? (s.pm.filter(p => !p.out).length > 1 ? (s.ly[k] ? 'Survived low' : 'Survived') : 'Last pup') : `Out ${ORD[s.rank ? s.rank[k] : 0] || ''}`; },
@@ -9171,37 +9187,30 @@ MGDEF.sink = {
     for (let i = 0; i < 12; i++) { const a = i / 12 * TAU + .3, r = 7 + (i * 5.3) % 9; v.clouds.push(cloud(v.scene, Math.cos(a) * r, -11 - (i % 3) * 2.5, Math.sin(a) * r, 1.6 + (i % 4) * .35)); }
     for (let i = 0; i < 5; i++) v.clouds.push(cloud(v.scene, -16 + i * 8, -2 - (i % 2) * 2, -15 - (i % 3) * 3, 2.2));
     v.clouds.forEach((c, i) => { c.userData.a = Math.atan2(c.position.z, c.position.x); c.userData.r = Math.hypot(c.position.x, c.position.z); c.userData.y = c.position.y; c.userData.k = i; c.traverse(o => { o.userData.noInk = true; o.castShadow = false; o.receiveShadow = false; }); });
-    // soft rounded toy hex tiles: cream slab + coloured cap (+ a crack decal shown while cracking), one InstancedMesh each per floor
+    // soft rounded toy hex slabs: body + coloured cap (+ a crack decal shown while cracking), one InstancedMesh each per
+    // layer; the lower slab sits right under the top one (surface C.LO), a thin dark gap between them
     const a = C.A, rhex = (r, cr) => {
       const sh = new THREE.Shape(), P = i => [Math.cos(i * TAU / 6) * r, Math.sin(i * TAU / 6) * r], t = cr / r;
       for (let i = 0; i < 6; i++) { const [x, z] = P(i), [x0, z0] = P(i - 1), [x1, z1] = P(i + 1); if (i) sh.lineTo(x + (x0 - x) * t, z + (z0 - z) * t); else sh.moveTo(x + (x0 - x) * t, z + (z0 - z) * t); sh.quadraticCurveTo(x, z, x + (x1 - x) * t, z + (z1 - z) * t); }
       sh.closePath(); return sh;
     };
-    const gBase = new THREE.ExtrudeGeometry(rhex(a * .9, .2), { depth: .22, bevelEnabled: true, bevelThickness: .06, bevelSize: .06, bevelSegments: 2, curveSegments: 3 }).rotateX(-Math.PI / 2).translate(0, -.34, 0);
+    const th = -C.LO - .08; /* slab body height: leaves a .08 gap under the top slab */
+    const gBase = new THREE.ExtrudeGeometry(rhex(a * .9, .2), { depth: th - .2, bevelEnabled: true, bevelThickness: .05, bevelSize: .06, bevelSegments: 2, curveSegments: 3 }).rotateX(-Math.PI / 2).translate(0, -th + .05, 0);
     const gTop = new THREE.ExtrudeGeometry(rhex(a * .8, .18), { depth: .04, bevelEnabled: true, bevelThickness: .04, bevelSize: .04, bevelSegments: 2, curveSegments: 3 }).rotateX(-Math.PI / 2).translate(0, -.08, 0);
     const rc = a * .78, gCrack = new THREE.ShapeGeometry(rhex(rc, .16)).rotateX(-Math.PI / 2).translate(0, .012, 0);
     const ctex = texCanvas(128, (c, n) => {
-      c.clearRect(0, 0, n, n); c.strokeStyle = 'rgba(110,40,20,.85)'; c.lineCap = c.lineJoin = 'round';
+      c.clearRect(0, 0, n, n); c.strokeStyle = 'rgba(70,25,10,.9)'; c.lineCap = c.lineJoin = 'round';
       let sd = 7; const rn = () => { sd = (sd * 16807) % 2147483647; return sd / 2147483647; };
-      for (let b = 0; b < 6; b++) { let x = n / 2 + (rn() - .5) * 10, y = n / 2 + (rn() - .5) * 10, ang = b / 6 * TAU + rn() * .6; c.lineWidth = 3.2; c.beginPath(); c.moveTo(x, y); for (let s2 = 0; s2 < 5; s2++) { ang += (rn() - .5) * .9; x += Math.cos(ang) * 11; y += Math.sin(ang) * 11; c.lineTo(x, y); c.lineWidth = 3.2 - s2 * .5; } c.stroke(); }
+      for (let b = 0; b < 6; b++) { let x = n / 2 + (rn() - .5) * 10, y = n / 2 + (rn() - .5) * 10, ang = b / 6 * TAU + rn() * .6; c.lineWidth = 3.6; c.beginPath(); c.moveTo(x, y); for (let s2 = 0; s2 < 5; s2++) { ang += (rn() - .5) * .9; x += Math.cos(ang) * 11; y += Math.sin(ang) * 11; c.lineTo(x, y); c.lineWidth = 3.6 - s2 * .5; } c.stroke(); }
     });
     ctex.repeat.set(1 / (2 * rc), 1 / (2 * rc)); ctex.offset.set(.5, .5);
-    // see-through window in the top floor over pups on the lower floor (dithered rim), so they never hide under it
-    v.win = { value: Array.from({ length: 6 }, () => new THREE.Vector3(0, 0, 0)) };
-    const winify = m => {
-      m.onBeforeCompile = sh => {
-        sh.uniforms.uWin = v.win;
-        sh.vertexShader = 'varying vec3 vWP;\n' + sh.vertexShader.replace('#include <project_vertex>', '#include <project_vertex>\n  vWP = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;');
-        sh.fragmentShader = 'varying vec3 vWP;\nuniform vec3 uWin[6];\n' + sh.fragmentShader.replace('void main() {', 'void main() {\n  for (int i = 0; i < 6; i++) { float r = uWin[i].z; if (r > 0.0) { float e = length(vWP.xz - uWin[i].xy) / r; if (e < 1.0 && (e < .72 || mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0)) discard; } }');
-      };
-      m.customProgramCacheKey = () => 'sinkwin'; return m;
-    };
-    const COL = [['#f7862c', '#fa943d', '#f2c890'], ['#4aa8d8', '#58b3df', '#c6e2f5']]; /* top floor warm, lower floor cool: cap a / b, slab */
+    const COL = [['#f7862c', '#fa943d', '#f2c890'], ['#3f86b8', '#4790c2', '#9cb9cf']]; /* top slab warm, lower slab cooler + darker: cap a / b, body */
     v.cTop = COL.map(c => [new THREE.Color(c[0]), new THREE.Color(c[1])]); v.cSlab = COL.map(c => new THREE.Color(c[2]));
-    v.cDark = [new THREE.Color('#9a4a1c'), new THREE.Color('#2f5f86')]; v.tcol = new THREE.Color(); v.mx = new THREE.Matrix4(); v.q = new THREE.Quaternion(); v.e = new THREE.Euler(); v.p3 = new THREE.Vector3(); v.s3 = new THREE.Vector3();
+    v.cDark = [new THREE.Color('#9a4a1c'), new THREE.Color('#1d3d5c')]; v.tcol = new THREE.Color(); v.mx = new THREE.Matrix4(); v.q = new THREE.Quaternion(); v.e = new THREE.Euler(); v.p3 = new THREE.Vector3(); v.s3 = new THREE.Vector3();
+    const n = this.G(s).cells.length;
     v.lay = [0, 1].map(L => {
-      const n = this.G(s, L).cells.length, mk = (geo, mat, shadow) => {
-        const m = new THREE.InstancedMesh(geo, L ? mat : winify(mat), n);
+      const mk = (geo, mat, shadow) => {
+        const m = new THREE.InstancedMesh(geo, mat, n);
         m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3); /* explicit: setColorAt can't size it */
         m.userData.noInk = true; m.castShadow = shadow; m.receiveShadow = true; m.frustumCulled = false; v.scene.add(m); return m;
       };
@@ -9209,43 +9218,45 @@ MGDEF.sink = {
       const crack = mk(gCrack, new THREE.MeshBasicMaterial({ map: ctex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), false); crack.receiveShadow = false; crack.renderOrder = 2;
       return { base, top, crack, prev: null };
     });
-    // falling chunks: one pooled instanced mesh (view-only)
-    const cm = new THREE.InstancedMesh(new THREE.CylinderGeometry(.2, .2, .16, 6), new THREE.MeshToonMaterial({ color: '#ffffff', gradientMap: GRAD }), 48);
-    cm.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(48 * 3).fill(1), 3); cm.userData.noInk = true; cm.castShadow = false; cm.frustumCulled = false;
-    const z0 = new THREE.Matrix4().makeScale(0, 0, 0); for (let i = 0; i < 48; i++) cm.setMatrixAt(i, z0);
-    v.scene.add(cm); v.ch = { m: cm, p: Array.from({ length: 48 }, () => ({ t: 9 })), i: 0 };
+    // falling pieces: one pooled instanced mesh (view-only); a dropped top slab breaks into these, a lower slab also falls whole
+    const cm = new THREE.InstancedMesh(new THREE.CylinderGeometry(.24, .24, .2, 6), new THREE.MeshToonMaterial({ color: '#ffffff', gradientMap: GRAD }), 64);
+    cm.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3).fill(1), 3); cm.userData.noInk = true; cm.castShadow = false; cm.frustumCulled = false;
+    const z0 = new THREE.Matrix4().makeScale(0, 0, 0); for (let i = 0; i < 64; i++) cm.setMatrixAt(i, z0);
+    v.scene.add(cm); v.ch = { m: cm, p: Array.from({ length: 64 }, () => ({ t: 9 })), i: 0 };
     addPups(v, s.ps);
-    const kc = (this.G(s, 1).R + 1) / 8.6 * 1.04;
-    v.cam.position.set(0, 18.2 * kc, 12.4 * kc); v.cam.lookAt(0, -1.8, 1.2); /* aimed nearer + a bit further back: the lower floor's near ring was cut at the bottom edge (6 pups) */
+    const kc = (this.G(s).R + 1.7) / 8.6 * 1.04;
+    v.cam.position.set(0, 18.2 * kc, 12.4 * kc); v.cam.lookAt(0, -.6, .9);
     return pmView(v);
   },
   sync(s, v) {
     const C = SINK, dt = clamp(NOW - (v.lt || NOW), 0, .1); v.lt = NOW;
     if (!v.dust) mgDust(v, '#ffffff', 40); dustTick(v);
     v.clouds.forEach(c => { const u = c.userData, a = u.a + NOW * .012; c.position.set(Math.cos(a) * u.r, u.y + Math.sin(NOW * .5 + u.k) * .25, Math.sin(a) * u.r); });
+    const G = this.G(s);
     for (let L = 0; L < 2; L++) {
-      const G = this.G(s, L), Y = this.Y(L), T0 = v.lay[L], tz = s.tz[L], first = !T0.prev;
+      const Y = L ? C.LO : 0, T0 = v.lay[L], tz = s.tz[L], first = !T0.prev, dr = L ? C.dropLo : C.drop;
       if (first) T0.prev = new Uint8Array(G.cells.length);
       G.cells.forEach(([q, r, x, z], i) => {
         const d = tz[i]; let y = Y, rx = 0, rz = 0, sc = 1, u = 0, cs = 0, st = 0;
         if (d > 0 && s.t < d) { // cracking: darker, shaking, cracks spreading
-          u = clamp(1 - (d - s.t) / C.drop, 0, 1); cs = .55 + .45 * u;
-          rx = Math.sin(NOW * 38 + i * 1.7) * .05 * u; rz = Math.cos(NOW * 33 + i) * .05 * u; y -= .05 * u;
-        } else if (d > 0) { // gone: drops away, tumbles, shrinks
+          u = clamp(1 - (d - s.t) / dr, 0, 1); cs = .55 + .45 * u;
+          rx = Math.sin(NOW * 38 + i * 1.7) * .05 * u; rz = Math.cos(NOW * 33 + i) * .05 * u; y -= .04 * u;
+        } else if (d > 0) { // gone
           const ag = s.t - d; st = 1; u = 1;
           if (!first && !T0.prev[i]) this.chunks(v, x, Y, z, L);
-          y -= 9 * ag * ag + ag; rx = ag * 1.8 * Math.sin(i * 12.9); rz = ag * 1.8 * Math.cos(i * 7.3); sc = ag > .8 ? 0 : clamp(1 - (ag - .3) / .5, 0, 1);
+          if (L) { y -= 9 * ag * ag + ag; rx = ag * 1.8 * Math.sin(i * 12.9); rz = ag * 1.8 * Math.cos(i * 7.3); sc = ag > .8 ? 0 : clamp(1 - (ag - .3) / .5, 0, 1); } // lower slab: falls away whole
+          else sc = 0; // top slab: breaks into pieces at once (it would fall through the lower slab)
         }
         T0.prev[i] = st;
         v.q.setFromEuler(v.e.set(rx, 0, rz)); v.mx.compose(v.p3.set(x, y, z), v.q, v.s3.set(sc, sc, sc));
         T0.base.setMatrixAt(i, v.mx); T0.top.setMatrixAt(i, v.mx);
-        v.mx.compose(v.p3.set(x, y, z), v.q, v.s3.set(cs * (st ? sc : 1), 1, cs * (st ? sc : 1))); T0.crack.setMatrixAt(i, cs ? v.mx : v.mx.makeScale(0, 0, 0));
+        v.mx.compose(v.p3.set(x, y, z), v.q, v.s3.set(cs * (st ? sc : 1), 1, cs * (st ? sc : 1))); T0.crack.setMatrixAt(i, cs && sc ? v.mx : v.mx.makeScale(0, 0, 0));
         v.tcol.copy(v.cTop[L][(q + 2 * r + 30) % 2]).lerp(v.cDark[L], u * .38); T0.top.setColorAt(i, v.tcol);
         v.tcol.copy(v.cSlab[L]).lerp(v.cDark[L], u * .3); T0.base.setColorAt(i, v.tcol);
       });
       for (const m of [T0.base, T0.top, T0.crack]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
     }
-    // chunks
+    // pieces
     const ch = v.ch; let cu = false;
     ch.p.forEach((p, i) => {
       if (p.t >= 9) return; p.t += dt; cu = true;
@@ -9255,32 +9266,26 @@ MGDEF.sink = {
       v.q.setFromEuler(v.e.set(p.r, p.r * .7, 0)); ch.m.setMatrixAt(i, v.mx.compose(v.p3.set(p.x, p.y, p.z), v.q, v.s3.set(k, k, k)));
     });
     if (cu) ch.m.instanceMatrix.needsUpdate = true;
-    // windows in the top floor over lower-floor pups: where the camera's ray to the pup crosses the top floor
-    const cp = v.cam.position;
-    v.win.value.forEach(w => w.set(0, 0, 0));
+    // pups: hop = tuck + landing squash; falling out through a hole = flail + surprise (a step down is not a fall)
     s.pm.forEach((p, k) => {
-      if (k > 5 || p.y > -.6 || p.y < C.Y1 - 2.5) return;
-      const yp = p.y + .7, t = (-.15 - yp) / (cp.y - yp);
-      v.win.value[k].set(p.x + (cp.x - p.x) * t, p.z + (cp.z - p.z) * t, 1.25);
-    });
-    // pups: hop = tuck + landing squash; falling between floors = flail + surprise
-    s.pm.forEach((p, k) => {
-      const L = s.ly[k], air = !p.out && (p.vy !== 0), fall = air && (p.vy < -3 || p.y < this.Y(L) - .05);
-      const h = hopAct(v, k, air && !fall ? Math.max(.01, p.y - this.Y(L)) : 0);
+      const L = s.ly[k], g = this.gh(s, sinkCell(G, p.x, p.z)), air = !p.out && (p.vy !== 0), fall = air && (g == null || p.y < g - .05);
+      const h = hopAct(v, k, air && !fall ? Math.max(.01, p.y - (g == null ? 0 : g)) : 0);
       const ex = fall ? { emote: 'surprise', et: .3, act: { aX: [-2.6 + Math.sin(NOW * 22) * .6, -2.6 - Math.sin(NOW * 22) * .6], aZ: [1.2, 1.2], lX: [Math.sin(NOW * 18) * .7, -Math.sin(NOW * 18) * .7], mouth: 1 } }
         : p.lg > 0 || p.st > 0 || p.out ? {} : { sq: h.sq, act: h.act };
       pmPose(s, v, k, 0, ex);
       if (v.pups[k]) v.pups[k].visible = p.y > -14;
-      const m = mgMem(v, k); if (m.ly === 0 && L === 1) dustPuff(v, p.x, -.1, p.z, 6, 1.4, 1.1); m.ly = L;
+      const m = mgMem(v, k); if (m.ly === 0 && L === 1) dustPuff(v, p.x, C.LO + .05, p.z, 5, 1.1, .9); m.ly = L;
       if (m.wasAir && !air && !p.out) dustPuff(v, p.x, p.y + .05, p.z, 3, .8, .8); m.wasAir = air;
     });
     pmFx(s, v);
   },
   chunks(v, x, y, z, L) {
-    const ch = v.ch;
-    for (let j = 0; j < 4; j++) {
-      const p = ch.p[ch.i], i = ch.i; ch.i = (ch.i + 1) % ch.p.length;
-      Object.assign(p, { x: x + (vR() - .5) * .9, y: y - .1, z: z + (vR() - .5) * .9, vx: (vR() - .5) * 2.6, vy: .4 + vR() * 1.4, vz: (vR() - .5) * 2.6, t: 0, s: .6 + vR() * .6, r: vR() * TAU });
+    const ch = v.ch, nP = L ? 4 : 6;
+    for (let j = 0; j < nP; j++) {
+      const p = ch.p[ch.i], i = ch.i, a = j / nP * TAU + vR() * .6; ch.i = (ch.i + 1) % ch.p.length;
+      // top slab: pieces pop up and fly outward off the stack; lower slab: drop with it
+      if (L) Object.assign(p, { x: x + (vR() - .5) * .9, y: y - .1, z: z + (vR() - .5) * .9, vx: (vR() - .5) * 2.6, vy: .4 + vR() * 1.4, vz: (vR() - .5) * 2.6, t: 0, s: .6 + vR() * .6, r: vR() * TAU });
+      else Object.assign(p, { x: x + Math.cos(a) * .35, y: y - .15, z: z + Math.sin(a) * .35, vx: Math.cos(a) * (2.2 + vR() * 1.2), vy: 2.6 + vR() * 1.6, vz: Math.sin(a) * (2.2 + vR() * 1.2), t: 0, s: .75 + vR() * .5, r: vR() * TAU });
       ch.m.setColorAt(i, v.tcol.copy(j % 2 ? v.cTop[L][0] : v.cSlab[L]));
     }
     ch.m.instanceColor.needsUpdate = true;
@@ -9288,10 +9293,10 @@ MGDEF.sink = {
   },
   hud(s, v) {
     const C = SINK;
-    s.pm.forEach((p, k) => { if (p.out && p.y < C.Y1 - 3) return; const [x, y] = toScreen(p.x, 2.3 + p.y, p.z, v.cam); tag(s.ps[k], x, y, p.out ? 'Out!' : null, p.out ? '#ffb0c0' : '#fff'); });
+    s.pm.forEach((p, k) => { if (p.out && p.y < C.LO - 3) return; const [x, y] = toScreen(p.x, 2.3 + p.y, p.z, v.cam); tag(s.ps[k], x, y, p.out ? 'Out!' : null, p.out ? '#ffb0c0' : '#fff'); });
     pmHud(s, v, 2.3);
     if (s.t != null && MS && MS.phase !== 'intro') T(`⏱ ${Math.max(0, C.DUR - s.t).toFixed(0)} s`, W / 2, 30, 26, '#fff', 'center', { lw: 5 });
-    // who's still in: a chip per pup (grey when out, a ▼ when on the lower floor)
+    // who's still in: a chip per pup (grey when out, a ▼ when on a lower slab)
     const cw = 116, x0 = W / 2 - s.n * cw / 2 + cw / 2;
     s.ps.forEach((pl, k) => {
       const out = s.pm[k].out, x = x0 + k * cw, y = 68;
@@ -10210,7 +10215,7 @@ Object.assign(MGCARD, {
   atag: { ic: '💥', btn: 'move', ctl: 'move', goal: "Don't hold the toy when it pops.", press: 'Got the toy? Bump into a pup to pass it.', push: 'Shove the holder away. Holding it? A landed shove passes it.', score: 'Holding it at the pop = out. Last pup in wins.', tip: 'Got it? Bump someone!' },
   kotk: { ic: 'crown', btn: 'move', ctl: 'move', goal: 'Stand on the comfy bed on your own.', press: 'Run onto the bed. It moves every few seconds.', push: 'Shove pups off the bed.', score: 'Alone on the bed = points. Two on it = nobody scores.', tip: 'Alone on the bed = points!' },
   paint: { ic: 'star', btn: 'move', ctl: 'move', goal: 'Paint the most lawn tiles your colour.', press: 'Run over tiles to paint them.', act: 'Dash: a quick burst of speed (short cooldown).', aw: 'Dash', push: 'A shove that lands splats paint round the pup.', bw: 'Splat', score: 'Most tiles when time runs out wins.', tip: 'Run over the tiles · Paint over theirs!' },
-  sink: { ic: 'swirl', btn: 'move', ctl: 'move', goal: 'Be the last pup still standing.', press: 'Keep moving: tiles drop after you step on them.', act: 'Hop over a hole (a hop does not crack tiles).', aw: 'Hop', push: 'Shove a pup into a hole!', score: 'Fall through the bottom floor and you are out.', tip: 'Keep moving · Hop over holes!' },
+  sink: { ic: 'swirl', btn: 'move', ctl: 'move', goal: 'Be the last pup still standing.', press: 'Keep moving: a tile loses its top, then its lower layer.', act: 'Hop over a hole (a hop does not crack tiles).', aw: 'Hop', push: 'Shove a pup into a hole!', score: 'Fall through a hole and you are out.', tip: 'Keep moving · Hop over holes!' },
   snowball: { ic: 'ball', btn: 'move', ctl: 'move', goal: 'Be the last pup still in the snowball fight.', press: 'Run around and hide behind the snow walls.', act: 'Hold to scoop a snowball, let go to throw it.', aw: 'Throw', push: 'A shove knocks the ball out of their paws.', score: 'Three hits and you are out.', tip: 'Hold to scoop · Let go to throw!' },
 });
 MGCARD.cannon = { ic: '💥', btn: 'move', ctl: 'move', goal: 'Be the last pup still standing.', press: 'Dodge the cannonballs. A red ring = a ball lands there!', act: 'Hop over a rolling ball.', aw: 'Hop', push: 'Shove a pup into a cannonball!', score: 'Three hits and you are out.', tip: 'Hop balls · Leave red rings!' };
