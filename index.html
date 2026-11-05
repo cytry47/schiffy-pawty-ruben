@@ -140,23 +140,30 @@ kbd { display: inline-block; min-width: 30px; padding: 1px 8px; margin: 0 2px; f
 .tscr .tpups .face { border-color: var(--ink); box-shadow: 0 4px 0 var(--sh), 0 0 0 3px rgba(255,255,255,.7); }
 .tscr .tfoot { background: var(--foot); }
 /* party setup: character-select style pup cards */
-.setup { width: 1100px; padding: 12px 24px 10px; }
+.setup { width: 1240px; padding: 10px 24px 8px; }
 .setup h2, .play h2 { margin: 0 0 10px; text-align: center; font-size: 34px; }
-.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.slot { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 10px 8px; border-radius: 22px; background: #fff; border: 4px solid var(--c); box-shadow: 0 5px 0 var(--c); transition: transform .12s, opacity .12s; }
+.setup .hd { margin-bottom: 8px; }
+.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; }
+/* pup card (fit pass 2026-11-04, no scrolling): portrait + arrows left, P-label / type / name right, controls under both */
+.slot { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-areas: "pk sh" "pk nm" "ctl ctl"; align-items: center; column-gap: 10px; padding: 6px 10px; border-radius: 22px; background: #fff; border: 4px solid var(--c); box-shadow: 0 5px 0 var(--c); transition: transform .12s, opacity .12s; }
 .slot.off { opacity: .55; border-style: dashed; box-shadow: none; background: rgba(255,255,255,.6); }
-.slot .sh { display: flex; width: 100%; align-items: center; justify-content: space-between; }
+.slot .sh { grid-area: sh; display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 6px; }
 .slot b { font-size: 26px; line-height: 1; color: var(--c); -webkit-text-stroke: 1.5px #3b2a45; paint-order: stroke fill; }
 .slot .btn { font-size: 17px; padding: 5px 12px; }
-.slot .tbtn { min-width: 128px; }
-.slot .pk { display: flex; align-items: center; gap: 10px; }
-.slot .ar { width: 50px; height: 50px; padding: 0; font-size: 30px; line-height: 1; border-radius: 50%; }
-.slot .face { width: 76px; height: 76px; border-radius: 50%; border: 4px solid #3b2a45; background: var(--c); box-shadow: 0 0 0 4px var(--c); }
+.slot .tbtn { min-width: 118px; }
+.slot .pk { grid-area: pk; display: flex; align-items: center; gap: 5px; }
+.slot .ar { width: 40px; height: 40px; padding: 0; font-size: 26px; line-height: 1; border-radius: 50%; }
+.slot .face { width: 70px; height: 70px; border-radius: 50%; border: 4px solid #3b2a45; background: var(--c); box-shadow: 0 0 0 4px var(--c); }
 .slot.off .face { filter: grayscale(1); }
-.slot .nm { font-size: 22px; font-weight: 700; line-height: 1.1; }
-.slot .ctl { display: flex; gap: 8px; justify-content: center; align-items: center; min-height: 38px; font-size: 16px; }
+.slot .nm { grid-area: nm; font-size: 22px; font-weight: 700; line-height: 1.1; }
+.slot .ctl { grid-area: ctl; display: flex; gap: 8px; justify-content: center; align-items: center; min-height: 38px; margin-top: 5px; font-size: 16px; }
 .slot .ctl .note { opacity: .65; font-weight: 600; }
+.slot .ctl .btn { white-space: nowrap; padding: 5px 9px; }
+.slot .ctl kbd { font-size: 13px; min-width: 22px; padding: 0 5px; }
 .sopts { display: flex; gap: 22px; align-items: center; justify-content: center; margin-top: 12px; flex-wrap: wrap; font-size: 18px; font-weight: 600; }
+/* setup settings: 2 columns of label + segmented buttons (Mode | Board, Rounds | CPU skill, Bonus bones | CPU speed) */
+.sgrid { display: grid; grid-template-columns: auto auto; justify-content: center; gap: 8px 30px; margin-top: 12px; font-size: 18px; font-weight: 600; }
+.sgrid .sl { display: inline-block; width: 132px; white-space: nowrap; }
 .seg { display: inline-flex; align-items: center; gap: 6px; }
 .seg .btn { font-size: 17px; padding: 6px 12px; min-width: 50px; }
 .row { display: flex; gap: 12px; align-items: center; justify-content: center; margin-top: 12px; flex-wrap: wrap; font-size: 18px; }
@@ -164,6 +171,9 @@ kbd { display: inline-block; min-width: 30px; padding: 1px 8px; margin: 0 2px; f
 .foot { display: flex; gap: 14px; align-items: center; justify-content: center; margin-top: 12px; }
 .foot .btn { font-size: 20px; }
 .foot .btn.big { font-size: 28px; padding: 10px 30px; }
+.setup .foot { margin-top: 12px; padding-bottom: 6px; }
+.setup .foot .btn.big { font-size: 26px; padding: 8px 28px; }
+.setup .small { margin-top: 6px; }
 /* how to play */
 .help { width: 1180px; padding: 16px 24px; }
 .hgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; text-align: left; }
@@ -272,12 +282,14 @@ img.ic { width: 1.25em; height: 1.25em; vertical-align: -.28em; margin: 0 .04em;
   .setup { padding: 6px 20px 6px; }
   .setup h2 { font-size: 28px; margin-bottom: 4px; }
   .setup .slots { gap: 8px; }
-  .setup .slot { padding: 3px 8px 4px; gap: 0; }
+  .setup .slot { padding: 3px 8px 4px; row-gap: 0; column-gap: 8px; }
   .setup .slot .ar { width: 50px; height: 50px; font-size: 30px; }
-  .setup .sopts { margin-top: 6px; gap: 12px; }
+  .setup .sgrid { margin-top: 8px; gap: 6px 22px; font-size: 20px; } .setup .sgrid .sl { width: 150px; }
+  .setup .slot .face { width: 62px; height: 62px; }
   .setup .foot { margin-top: 6px; padding-bottom: 10px; } /* room for the button's drop shadow, or the card scrolls */
-  .setup .foot .btn.big { font-size: 24px; padding: 6px 24px; }
-  .setup .seg .btn { padding: 5px 12px; }
+  .setup .foot .btn.big { font-size: 26px; padding: 8px 26px; }
+  .setup .seg .btn { padding: 9px 14px; }
+  .setup .slot .ctl { font-size: 19px; gap: 6px; } .setup .slot .ctl .btn { padding: 7px 8px; } .setup .slot .ctl kbd { font-size: 14px; min-width: 20px; padding: 0 4px; margin: 0 1px; }
 }
 #touch { position: absolute; left: 0; right: 0; bottom: 0; display: none; gap: 6px; padding: 0 6px 6px; }
 #touch.on { display: flex; }
@@ -11641,24 +11653,25 @@ function renderSetup() {
   const room = NET.mode !== 'host' ? '' : `<div class="nroom">${NET.code ? `🌐 Room code <b>${NET.code}</b> · Friends pick “Online party” and enter this code` : NET.status}
     <button class="btn ghost" data-do="nclose">Close room</button></div>`;
   $('#screen').innerHTML = `<div class="card setup"><div class="hd"><h2>Party setup</h2><span class="sub">${nOn} pups ready</span></div>${room}<div class="slots">${rows}</div>
-    <div class="sopts">${modeSeg(false)}<span class="seg">Rounds ${[5, 10, 15, 20].map(r => `<button class="btn${CFG.rounds === r ? ' sel' : ' ghost'}" data-do="rounds:${r}">${r}</button>`).join('')}</span>
-      <button class="btn ghost" data-do="bonus">🏅 Bonus bones: ${CFG.bonus ? 'On' : 'Off'}</button></div>
-    <div class="sopts"><span class="seg">🧠 CPU skill ${['easy', 'normal', 'hard'].map(c => `<button class="btn${(CFG.cpu || 'normal') === c ? ' sel' : ' ghost'}" data-do="cpuset:${c}">${c[0].toUpperCase() + c.slice(1)}</button>`).join('')}</span>
-      ${mapSeg()}<span class="seg">⏩ CPU speed ${[[false, 'Normal'], [true, 'Fast']].map(([f, l]) => `<button class="btn${!!CFG.fast === f ? ' sel' : ' ghost'}" data-do="cpufast:${f ? 1 : 0}">${l}</button>`).join('')}</span></div>
+    <div class="sgrid">${modeSeg(false)}${mapSeg()}
+      <span class="seg"><span class="sl">🔢 Rounds</span>${[5, 10, 15, 20].map(r => `<button class="btn${CFG.rounds === r ? ' sel' : ' ghost'}" data-do="rounds:${r}">${r}</button>`).join('')}</span>
+      <span class="seg"><span class="sl">🧠 CPU skill</span>${['easy', 'normal', 'hard'].map(c => `<button class="btn${(CFG.cpu || 'normal') === c ? ' sel' : ' ghost'}" data-do="cpuset:${c}">${c[0].toUpperCase() + c.slice(1)}</button>`).join('')}</span>
+      <span class="seg"><span class="sl">🏅 Bonus bones</span>${[[false, 'Off'], [true, 'On']].map(([f, l]) => `<button class="btn${!!CFG.bonus === f ? ' sel' : ' ghost'}" data-do="bonusv:${f ? 1 : 0}">${l}</button>`).join('')}</span>
+      <span class="seg"><span class="sl">⏩ CPU speed</span>${[[false, 'Normal'], [true, 'Fast']].map(([f, l]) => `<button class="btn${!!CFG.fast === f ? ' sel' : ' ghost'}" data-do="cpufast:${f ? 1 : 0}">${l}</button>`).join('')}</span></div>
     <div class="foot"><button class="btn ghost" data-do="go:title">‹ Back</button><button class="btn ghost" data-do="go:help">📖 How to play</button>
       <button class="btn go big" data-do="start"${nOn < 2 ? ' disabled' : ''}>🎲 Let's party!</button></div>
-    <div class="small center">${nOn < 2 ? 'A party needs at least 2 pups. ' : ''}${act ? '🏃 Action: run + shove games mixed with one-button games. Click the keys to switch sets (WASD + left / right click · arrows + R-Shift / R-Ctrl · numpad), or ✎ to set your own. Gamepads: press A to join (stick, A = action, B = push).'
+    <div class="small center">${nOn < 2 ? 'A party needs at least 2 pups. ' : ''}${act ? '🏃 Action: run + shove games. Click the keys to switch sets (WASD + mouse · arrows · numpad), ✎ = your own. Pads: press A to join (stick, A action, B push).'
       : '🔘 Simple: every game is one button (phones, touch). Click a key to change it. Gamepads: press A to join, or pick the pad with ⇄.'}</div></div>`;
   applyStyles();
   const back = foc && $(`#screen [data-do="${foc}"]`);
   if (back) back.focus({ preventScroll: true });
 }
 // board picker (extra boards): Classic Island / Pummel Town / Snow, saved in CFG.map, locked for guests
-function mapSeg() { const lock = NET.mode === 'client'; return `<span class="seg">🗺️ Board ${Object.entries(MAPS).map(([k, m]) => `<button class="btn${(CFG.map || 'classic') === k ? ' sel' : ' ghost'}" data-do="smap:${k}"${lock ? ' disabled' : ''}>${m.ic} ${m.name}</button>`).join('')}</span>`; }
+function mapSeg() { const lock = NET.mode === 'client'; return `<span class="seg"><span class="sl">🗺️ Board</span>${Object.entries(MAPS).map(([k, m]) => `<button class="btn${(CFG.map || 'classic') === k ? ' sel' : ' ghost'}" data-do="smap:${k}"${lock ? ' disabled' : ''}>${m.ic} ${m.name}</button>`).join('')}</span>`; }
 // party mode: Simple = every game one button (phones, touch, 6 on one keyboard); Action = move + push games mixed in
 function modeSeg(note = true) {
   const lock = NET.mode === 'client';
-  return `<span class="seg">🎮 Mode ${[['simple', '🔘 Simple'], ['action', '🏃 Action']].map(([k, l]) => `<button class="btn${CFG.mode === k ? ' sel' : ' ghost'}" data-do="smode:${k}"${lock ? ' disabled' : ''}>${l}</button>`).join('')}</span>` +
+  return `<span class="seg"><span class="sl">🎮 Mode</span>${[['simple', '🔘 Simple'], ['action', '🏃 Action']].map(([k, l]) => `<button class="btn${CFG.mode === k ? ' sel' : ' ghost'}" data-do="smode:${k}"${lock ? ' disabled' : ''}>${l}</button>`).join('')}</span>` +
     (note ? `<span class="note">${CFG.mode === 'action' ? 'Run + shove games (keys, gamepads or the touch stick), one-button games as breathers' : 'Every game uses one button: works on phones and touch screens'}</span>` : '');
 }
 // How to play: shared by the title menu and the pause menu
@@ -11775,6 +11788,7 @@ const ACT = {
   smode: k => { CFG.mode = k === 'action' ? 'action' : 'simple'; saveCfg(); if (SCREEN === 'play') setScreen('play'); else renderSetup(); },
   rounds: r => { CFG.rounds = +r; saveCfg(); renderSetup(); },
   bonus: () => { CFG.bonus = !CFG.bonus; saveCfg(); renderSetup(); },
+  bonusv: v => { CFG.bonus = v === '1'; saveCfg(); renderSetup(); },
   fast: () => { CFG.fast = !CFG.fast; saveCfg(); renderSetup(); },
   cpufast: v => { CFG.fast = v === '1'; saveCfg(); renderSetup(); },
   cpuset: c => { CFG.cpu = c; saveCfg(); renderSetup(); },
