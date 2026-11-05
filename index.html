@@ -8523,7 +8523,7 @@ const MGB_V0 = {}, MGB_V = {
     // table top (the slab is 1.39-1.45 high: a soft dome) + cup numbers of the fix 24d models (prep_mg.py: uniform scales; checked by review/cups/cups_check.py)
     v.top = 1.43; v.cz = .15; v.arcZ = .62; v.cupR = .54; v.ptrY = v.top + 2.75;
     v.bone = boneMesh(); v.bone.scale.setScalar(.95); v.scene.add(v.bone);
-    v.bone.traverse(n => { if (n.isMesh) delete n.userData.ink; }); inkify(v.bone, { k: .005, max: .08, min: .01 }); /* the items-GLB bone comes baked (bakeGroup marks it inked: no shell under the Pupkins look) */
+    v.bone.traverse(n => { if (n.isMesh) n.userData.noInk = true; }); /* fix 25a (Ruben): no outline on the bone; the cream table top shows it well enough */
     v.bone.updateMatrixWorld(true); v.boneY = -new THREE.Box3().setFromObject(v.bone).min.y + .04; // resting on the slab (+ room for the -.3 tilt)
     v.bsh = M(GEO.disc, new THREE.MeshBasicMaterial({ color: '#3b2a45', transparent: true, opacity: .28, depthWrite: false }), 0, 0, 0, v.scene, 1.25, .01, .62); v.bsh.castShadow = false; v.bsh.userData.noInk = true;
     v.cups = [0, 1, 2, 3].map(() => { const c = mgbOne('Mgb_cup'); v.scene.add(c); return c; });
